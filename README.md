@@ -33,7 +33,7 @@ from the phone to the laptop mid-task without stopping anything.
   <img src="https://raw.githubusercontent.com/kosio-labs/clicker4ai/main/assets/screenshots/tabs.png" width="150" alt="Tabs">
 </p>
 
-*Unofficial: not made or endorsed by Anthropic (see
+*An independent open-source project, not affiliated with Anthropic (see
 [Authentication and trademarks](#authentication-and-trademarks)).*
 
 ## Features
