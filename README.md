@@ -22,6 +22,20 @@ from the phone to the laptop mid-task without stopping anything.
 > device, structured (not terminal-scraped) output, and a UI that works on a
 > phone screen first and scales up to a tablet or desktop browser.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/kosio-labs/clicker4ai/main/assets/screenshots/demo.gif" width="300" alt="A session waiting for approval: Allow, the tests run, then Tabs">
+</p>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/kosio-labs/clicker4ai/main/assets/screenshots/home.png" width="150" alt="Home: last sessions and projects">
+  <img src="https://raw.githubusercontent.com/kosio-labs/clicker4ai/main/assets/screenshots/projects.png" width="150" alt="Projects">
+  <img src="https://raw.githubusercontent.com/kosio-labs/clicker4ai/main/assets/screenshots/sessions.png" width="150" alt="Sessions">
+  <img src="https://raw.githubusercontent.com/kosio-labs/clicker4ai/main/assets/screenshots/chat.png" width="150" alt="Chat with a diff and an approval card">
+  <img src="https://raw.githubusercontent.com/kosio-labs/clicker4ai/main/assets/screenshots/tabs.png" width="150" alt="Tabs">
+</p>
+
+*Unofficial: not made or endorsed by Anthropic (see
+[Authentication and trademarks](#authentication-and-trademarks)).*
+
 ## Features
 
 - **Start & pick projects from any device** — recent projects from `~/.claude`
