@@ -47,7 +47,7 @@ from the phone to the laptop mid-task without stopping anything.
 
 **Contents:** [Quickstart](#quickstart) ·
 [Works well with](#works-well-with) ·
-[Compared with Remote Control](#compared-with-claude-code-remote-control) ·
+[Clicker4AI and Remote Control](#clicker4ai-and-claude-code-remote-control) ·
 [Features](#features) · [Running the server](#running-the-server) ·
 [Configuration](#configuration) · [Devices and grants](#devices-and-grants) ·
 [Passkeys](#passkeys) · [True View](#true-view) ·
@@ -115,17 +115,18 @@ posture, your sleep and your loved ones may file complaints — take breaks.
 We saw it coming: `c4ai quiet-hours 00:30-08:00` lets the last turn finish
 and then says goodnight, and only the server's CLI can talk it out of that.*
 
-## Compared with Claude Code Remote Control
+## Clicker4AI and Claude Code Remote Control
 
 Claude Code has its own
 [Remote Control](https://code.claude.com/docs/en/remote-control), which
 carries a session over to claude.ai/code or the Claude app. It is official,
-polished and needs no server of your own — if it fits, use it. Clicker4AI is
-for other constraints:
+polished and needs no server of your own — if it fits, use it. Clicker4AI
+suits a different setup:
 
-- **No relay.** Remote Control routes the session through the Anthropic API;
-  here your devices talk only to your own server, over your own network or
-  VPN. What reaches Anthropic is only what the `claude` CLI itself sends.
+- **Your own network.** Remote Control routes the session through the
+  Anthropic API; here your devices talk only to your own server, over your
+  own network or VPN. What reaches Anthropic is only what the `claude` CLI
+  itself sends.
 - **Any sign-in.** Remote Control needs a claude.ai Pro, Max, Team or
   Enterprise login; API keys, Amazon Bedrock, Google Cloud and Microsoft
   Foundry are not supported. Clicker4AI runs whatever `claude` is signed in
