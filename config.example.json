@@ -1,0 +1,11 @@
+{
+  "allowed_roots": ["~/work"],
+  "host": "127.0.0.1",
+  "port": 8780,
+  "public_url": null,
+  "max_runners": 6,
+  "lock_idle_minutes": 15,
+  "log_level": "warning",
+  "quiet_hours": null,
+  "quiet_tz": null
+}

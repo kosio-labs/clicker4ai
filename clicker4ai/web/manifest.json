@@ -1,0 +1,13 @@
+{
+  "name": "Clicker4AI",
+  "short_name": "Clicker",
+  "description": "Remote control for Claude Code sessions on your server",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#141210",
+  "theme_color": "#141210",
+  "icons": [
+    { "src": "/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

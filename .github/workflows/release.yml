@@ -1,0 +1,47 @@
+# Build and upload to PyPI when a version tag is pushed (v1.0.0rc1, v1.0.0, …).
+# PyPI trusts this workflow by name (trusted publishing): no API token is
+# stored anywhere. The names below — this file's name and the `pypi`
+# environment — must match the publisher registered on PyPI.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Tag matches the version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)
+          init=$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' clicker4ai/__init__.py)
+          if [ "v$version" != "$GITHUB_REF_NAME" ] || [ "$version" != "$init" ]; then
+            echo "tag $GITHUB_REF_NAME, pyproject.toml $version, clicker4ai/__init__.py $init"
+            exit 1
+          fi
+      - run: python -m pip install build
+      - run: python -m build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/clicker4ai/
+    permissions:
+      id-token: write   # the OIDC token PyPI checks instead of a password
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

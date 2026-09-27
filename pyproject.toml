@@ -1,0 +1,56 @@
+[project]
+name = "clicker4ai"
+version = "1.0.0rc1"
+description = "Self-hosted web app to drive Claude Code sessions on your Linux server from a phone, tablet or laptop"
+readme = "README.md"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Kosio", email = "labs@kosio.eu" }]
+requires-python = ">=3.13"
+keywords = ["claude", "claude-code", "remote-control", "pwa", "mobile", "tablet",
+            "terminal", "ai", "agent"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: Terminals",
+]
+dependencies = [
+    # upper bound: see SDK_RANGE in clicker4ai/sdk_update.py (keep in step)
+    "claude-agent-sdk>=0.2.111,<0.3",
+    "fastapi>=0.139.0",
+    "qrcode>=8.2",
+    "uvicorn>=0.50.2",
+    "webauthn>=3.0.0",
+    "websockets>=16.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/kosio-labs/clicker4ai"
+Repository = "https://github.com/kosio-labs/clicker4ai"
+Issues = "https://github.com/kosio-labs/clicker4ai/issues"
+Upstream = "https://github.com/rafa-rrayes/better-claude-rc"
+
+[project.scripts]
+c4ai = "clicker4ai.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["clicker4ai"]
+# The PWA ships inside the wheel (clicker4ai/web/**), including vendored JS.
+artifacts = ["clicker4ai/web/**"]
+
+[tool.hatch.build.targets.sdist]
+include = ["clicker4ai", "scripts", "README.md", "LICENSE", "NOTICE",
+           "config.example.json"]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+]

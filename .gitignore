@@ -1,0 +1,24 @@
+# Runtime data: auth token + private session transcripts.
+# Recreated automatically on first run (clicker4ai/config.py Config.load()).
+data/
+
+# Personal working notes (plan, todo, lessons) — local only
+tasks/
+
+# Scratch space for anything a session needs to keep for a moment — test
+# logs, captured command output. Inside the repo on purpose: it survives a
+# reboot (unlike /tmp) and stays where the work is.
+.scratch/
+
+# Python virtualenv (recreate with `python3 -m venv .venv && .venv/bin/pip install -e .`)
+.venv/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Tooling caches
+.ruff_cache/
+
+# macOS
+.DS_Store
