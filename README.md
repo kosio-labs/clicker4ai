@@ -36,6 +36,111 @@ from the phone to the laptop mid-task without stopping anything.
 *An independent open-source project, not affiliated with Anthropic (see
 [Authentication and trademarks](#authentication-and-trademarks)).*
 
+> **Status:** release candidate. Linux, Python ≥ 3.13, and the Claude Code
+> CLI installed and signed in (an API key, a cloud provider or a claude.ai
+> account — see [Requirements](#requirements)).
+>
+> **Mind the reach:** a device gets only the folders you grant it, but a
+> session may still touch files outside its folder within the permissions
+> you approve. Read the [Security model](#security-model) before you let
+> other devices reach the server.
+
+**Contents:** [Quickstart](#quickstart) ·
+[Works well with](#works-well-with) ·
+[Compared with Remote Control](#compared-with-claude-code-remote-control) ·
+[Features](#features) · [Running the server](#running-the-server) ·
+[Configuration](#configuration) · [Devices and grants](#devices-and-grants) ·
+[Passkeys](#passkeys) · [True View](#true-view) ·
+[Reverse proxy](#reverse-proxy-caddy) · [Requirements](#requirements) ·
+[Authentication and trademarks](#authentication-and-trademarks) ·
+[Security model](#security-model) · [Development](#development) ·
+[Changes](#changes)
+
+## Quickstart
+
+Requires Python ≥ 3.13 and [pipx](https://pipx.pypa.io) (or `uv tool
+install` in its place). If pipx's default Python is older, add `--python
+python3.13`.
+
+```bash
+pipx install clicker4ai==1.0.0rc2     # a release candidate needs its version
+c4ai config roots add ~/work          # the folders devices may be given
+c4ai serve                            # start the server
+```
+
+To run from a clone instead, see [Development](#development).
+
+`c4ai config roots add` writes `allowed_roots`, the one required setting: the
+ceiling of what any device may reach, never your home directory or anything
+above it (see [Configuration](#configuration)). The server keeps its data
+(config, devices, passkeys, session logs, incognito folders) in
+`~/.clicker4ai`; `C4AI_DATA_DIR` moves it.
+
+Restarting, upgrading or reinstalling keeps all of this: `c4ai serve` picks up
+where it left off. To wipe it, see
+[Uninstall and starting over](#uninstall-and-starting-over).
+
+On start, the server prints its URL, a **one-time pairing code** (valid
+2 minutes, single use), a **pairing link** and a **QR code**. Scan the QR with
+your phone's camera (or open the link, or type the code) to launch the PWA and
+pair the device in one step. A new device reaches no folders until you give it
+some — see [Devices and grants](#devices-and-grants). The server listens on
+**127.0.0.1** only; to reach it from other devices, see
+[Running the server](#running-the-server).
+
+## Works well with
+
+**Tablet + code-server.** Run
+[code-server](https://github.com/coder/code-server) (VS Code in the browser) on
+the same machine and a tablet becomes a complete workstation. Claude works in
+Clicker4AI while the editor shows each change the moment it lands — browse the
+tree, read the whole diff, commit, open a terminal. Nothing lives on the tablet:
+put it down, pick up the laptop or the phone, and the session and the editor are
+exactly where you left them.
+
+**Or skip the editor.** If you'd rather vibe-code, Clicker4AI alone will do:
+say what you want, and Claude writes the code, runs the tests and, for a
+website or web app, starts a preview you simply check in your browser. You
+judge the result, not the diff — and when you do want to see a file, Project
+files opens it right in the app.
+
+**One small server is enough.** A modest VPS runs it all: Clicker4AI and your
+projects with their previews (plus code-server, if you want an editor). Put it
+behind a VPN and that one box becomes your whole development and test
+environment, reachable from any device you own.
+
+*Fair warning: this is dangerously addictive. You'll catch yourself shipping
+features from the bus stop, the sofa and the dentist's waiting room. Your
+posture, your sleep and your loved ones may file complaints — take breaks.
+We saw it coming: `c4ai quiet-hours 00:30-08:00` lets the last turn finish
+and then says goodnight, and only the server's CLI can talk it out of that.*
+
+## Compared with Claude Code Remote Control
+
+Claude Code has its own
+[Remote Control](https://code.claude.com/docs/en/remote-control), which
+carries a session over to claude.ai/code or the Claude app. It is official,
+polished and needs no server of your own — if it fits, use it. Clicker4AI is
+for other constraints:
+
+- **No relay.** Remote Control routes the session through the Anthropic API;
+  here your devices talk only to your own server, over your own network or
+  VPN. What reaches Anthropic is only what the `claude` CLI itself sends.
+- **Any sign-in.** Remote Control needs a claude.ai Pro, Max, Team or
+  Enterprise login; API keys, Amazon Bedrock, Google Cloud and Microsoft
+  Foundry are not supported. Clicker4AI runs whatever `claude` is signed in
+  with (see [Authentication and trademarks](#authentication-and-trademarks)).
+- **Pick the folder on the device.** Remote Control works in the directory
+  where you started `claude` (the server mode can add git worktrees of it);
+  here a device browses the folders you granted it and starts or resumes a
+  session in any of them.
+- **Grants per device.** Each phone, tablet or laptop gets its own folders
+  and, only if you say so, True View (the real Claude Code TUI), project
+  files and upload — set from the server's CLI, all off by default. A
+  passkey unlocks a device after it locks.
+- **Around the session:** project files without spending tokens, an
+  incognito chat, quiet hours, plan usage in the status line.
+
 ## Features
 
 - **Start & pick projects from any device** — recent projects from `~/.claude`
@@ -99,65 +204,6 @@ from the phone to the laptop mid-task without stopping anything.
   reload, so a restart is not silently invisible. Tested on iOS/iPadOS
   Safari and desktop browsers; Android uses the same web APIs but is
   untested.
-
-## Works well with
-
-**Tablet + code-server.** Run
-[code-server](https://github.com/coder/code-server) (VS Code in the browser) on
-the same machine and a tablet becomes a complete workstation. Claude works in
-Clicker4AI while the editor shows each change the moment it lands — browse the
-tree, read the whole diff, commit, open a terminal. Nothing lives on the tablet:
-put it down, pick up the laptop or the phone, and the session and the editor are
-exactly where you left them.
-
-**Or skip the editor.** If you'd rather vibe-code, Clicker4AI alone will do:
-say what you want, and Claude writes the code, runs the tests and, for a
-website or web app, starts a preview you simply check in your browser. You
-judge the result, not the diff — and when you do want to see a file, Project
-files opens it right in the app.
-
-**One small server is enough.** A modest VPS runs it all: Clicker4AI and your
-projects with their previews (plus code-server, if you want an editor). Put it
-behind a VPN and that one box becomes your whole development and test
-environment, reachable from any device you own.
-
-*Fair warning: this is dangerously addictive. You'll catch yourself shipping
-features from the bus stop, the sofa and the dentist's waiting room. Your
-posture, your sleep and your loved ones may file complaints — take breaks.
-We saw it coming: `c4ai quiet-hours 00:30-08:00` lets the last turn finish
-and then says goodnight, and only the server's CLI can talk it out of that.*
-
-## Quickstart
-
-Requires Python ≥ 3.13 and [pipx](https://pipx.pypa.io) (or `uv tool
-install` in its place). If pipx's default Python is older, add `--python
-python3.13`.
-
-```bash
-pipx install clicker4ai==1.0.0rc2     # a release candidate needs its version
-c4ai config roots add ~/work          # the folders devices may be given
-c4ai serve                            # start the server
-```
-
-To run from a clone instead, see [Development](#development).
-
-`c4ai config roots add` writes `allowed_roots`, the one required setting: the
-ceiling of what any device may reach, never your home directory or anything
-above it (see [Configuration](#configuration)). The server keeps its data
-(config, devices, passkeys, session logs, incognito folders) in
-`~/.clicker4ai`; `C4AI_DATA_DIR` moves it.
-
-Restarting, upgrading or reinstalling keeps all of this: `c4ai serve` picks up
-where it left off. To wipe it, see
-[Uninstall and starting over](#uninstall-and-starting-over).
-
-On start, the server prints its URL, a **one-time pairing code** (valid
-2 minutes, single use), a **pairing link** and a **QR code**. Scan the QR with
-your phone's camera (or open the link, or type the code) to launch the PWA and
-pair the device in one step. A new device reaches no folders until you give it
-some — see [Devices and grants](#devices-and-grants). The server listens on
-**127.0.0.1** only; to reach it from other devices, see
-[Running the server](#running-the-server).
 
 ## Running the server
 
