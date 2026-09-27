@@ -642,6 +642,21 @@ a { color: var(--accent); }
 #status-line .s-usage { flex: none; color: var(--faint); white-space: nowrap; }
 #status-line .s-usage .mid { color: var(--warn); }
 #status-line .s-usage .high { color: var(--err); }
+/* chat while True View runs: the way back to the terminal */
+#tv-bar {
+  flex: none;
+  display: flex; gap: 8px; align-items: center; justify-content: space-between;
+  padding: 6px 14px;
+  font-family: var(--mono); font-size: 12px; color: var(--accent);
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+#tv-bar.hidden { display: none; }
+#tv-bar button {
+  font-family: var(--mono); font-size: 12px; padding: 5px 12px;
+  border: 1px solid var(--accent); border-radius: 8px;
+  color: var(--accent); background: transparent;
+}
 /* info sheet: a bar right under each plan-usage row */
 .usage-row { padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .usage-row .kv { border-bottom: none; padding-bottom: 2px; }
@@ -711,9 +726,17 @@ a { color: var(--accent); }
 .sheet .grab { width: 38px; height: 4px; border-radius: 2px; background: var(--border); margin: 2px auto 12px; flex: none; }
 .sheet .sheet-title { font-family: var(--mono); font-size: 13px; font-weight: 600; margin-bottom: 12px; }
 .sheet .sheet-body { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+/* a fixed head over a .sheet-body list: without min-height the column grows
+   past the sheet's max-height and the list below the screen cannot scroll */
+.sheet .sheet-col { display: flex; flex-direction: column; min-height: 0; }
 .sheet .sheet-foot { flex: none; border-top: 1px solid var(--border); padding-top: 12px; margin-top: 4px; }
 /* project files: a file on a sheet (app.js fileSheet) */
 .file-text { font-family: var(--mono); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.file-find { position: sticky; top: 0; z-index: 1; background: var(--surface); display: flex; gap: 6px; align-items: center; padding-bottom: 8px; }
+.sheet .file-find input[type="text"] { flex: 1; min-width: 0; margin-bottom: 0; }
+.file-find .ff-count { font-family: var(--mono); font-size: 11px; color: var(--dim); flex: none; }
+.file-text mark { background: color-mix(in srgb, var(--accent) 30%, transparent); color: inherit; border-radius: 2px; }
+.file-text mark.cur { background: var(--accent); color: var(--bg); }
 .file-img { display: block; max-width: 100%; height: auto; margin: 0 auto; background: repeating-conic-gradient(#8883 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
 .file-img-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .file-img-wrap.full .file-img { max-width: none; }
@@ -752,6 +775,8 @@ a.btn { display: inline-block; color: inherit; text-decoration: none; text-align
 .sheet-item .si-main { flex: 1; min-width: 0; }
 .sheet-item .si-sub { font-family: var(--mono); font-size: 11px; color: var(--dim); margin-top: 1px; }
 .sheet-item.danger { color: var(--err); }
+/* the default choice: accent, and ⏎ takes it with a keyboard */
+.sheet-item.primary { color: var(--accent); font-weight: 600; }
 .sheet-item .si-check { color: var(--accent); flex: none; }
 .sheet input[type="search"], .sheet input[type="text"] {
   width: 100%; background: var(--surface2); border: 1px solid var(--border);

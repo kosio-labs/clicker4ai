@@ -245,6 +245,25 @@ def main() -> None:
         assert passkey._unique_name([{"id": "z", "name": long}], long) == "y" * 60 + " (2)"
         print("unique names ok — taken refused, registration numbered, fits the limit")
 
+        # a device name may start with "-" too; the device commands take it
+        # as data, not an option (the server re-reads devices.json)
+        def dcli(*a):
+            return subprocess.run([sys.executable, "-m", "clicker4ai", *a],
+                                  cwd=Path(__file__).resolve().parent.parent,
+                                  env={**os.environ, "C4AI_DATA_DIR": str(DATA_DIR)},
+                                  capture_output=True, text=True)
+        old_name = next(d["name"] for d in srv.devices.list() if d["id"] == new_id)
+        out = dcli("devices", "rename", new_id, "-old")
+        assert out.returncode == 0, out
+        for a in (("devices", "lock", "-old"), ("devices", "unlock", "-old"),
+                  ("devices", "rename", "-old", *old_name.split())):
+            out = dcli(*a)
+            assert out.returncode == 0, out
+        assert srv.devices.resolve(old_name) == new_id and srv.devices.resolve("-old") is None
+        assert dcli("revoke", "-nosuch").returncode == 1
+        assert dcli("devices", "rename", "-h").returncode == 0   # help still works
+        print("device names ok — rename / lock / unlock / revoke take a leading '-'")
+
         # the CLI gives it folders; the credential was not involved
         assert srv.devices.set_roots(new_id, [str(Path.home() / "work")])
         assert c.get("/api/state").json()["has_roots"], "set-roots must take effect"

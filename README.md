@@ -52,6 +52,13 @@ from the phone to the laptop mid-task without stopping anything.
 - **Tap-to-approve permissions** — remote permission prompts park on the server
   and surface in the app as Allow / Deny (with "always allow" suggestions),
   plan-mode approval, and AskUserQuestion option buttons.
+- **Commands under `/`** — the `/` button next to the message box lists the
+  app's own commands first (`/btw` for a side question, `/files`, `/compact`,
+  `/rename`, model, permission mode, session info, library; `/clear` last),
+  then the session's Claude Code commands, your own from
+  `~/.claude/commands` included; a filter narrows the list. `/btw`,
+  `/files`, `/compact`, `/clear`, `/model`, `/mode` and `/info` also work
+  typed and sent as a message.
 - **Live terminal ↔ webapp sync** — turns typed in the terminal `claude` appear
   in the webapp in real time (transcript tailer); the app's next message
   silently rotates through resume so both sides share full context on one
@@ -127,7 +134,7 @@ install` in its place). If pipx's default Python is older, add `--python
 python3.13`.
 
 ```bash
-pipx install clicker4ai==1.0.0rc1     # a release candidate needs its version
+pipx install clicker4ai==1.0.0rc2     # a release candidate needs its version
 c4ai config roots add ~/work          # the folders devices may be given
 c4ai serve                            # start the server
 ```
@@ -419,12 +426,17 @@ c4ai quiet-hours --tz Europe/London # window in this zone, not host time
 
 Project files (`--files` on `c4ai pair` or `c4ai devices set <id>`) add
 *Files* to a project screen, to a session's ⋯ menu (session list and Tabs) and
-to the chat as `/files`: a plain list of the folder, with no Claude and no
-tokens involved. Tap a file to see it — text as plain text (the first 1 MB),
+to the chat as `/files` (pick it from the list under the `/` button next to
+the message box, or type `/files` and send it): a plain list of the folder,
+with no Claude and no tokens involved. Tap a file to see it — text as plain text (the first 1 MB),
 images whole on the screen and never above 1:1 with its pixels (a tap shows 1:1)
 — or download it (with a keyboard: ↑ ↓ scroll, ← → the next file, `d` downloads,
-⏎ closes; back closes just the viewer). In the chat, ↗ on a Read, Edit or Write
-card opens that file the same way. Hidden files are listed; `.git`,
+⏎ closes; back closes just the viewer). *Find* (`/`, ⌘F or Ctrl+F) searches
+a text file: matches are highlighted, ⏎ and ⇧⏎ (or ↓ ↑) go from one to the
+next, esc closes the search. In the chat, ↗ on a Read, Edit or Write
+card opens that file the same way. From a session it opens in the session's
+folder; "‹ up" goes on above it as far as the device's folders reach.
+Hidden files are listed; `.git`,
 `node_modules` and `.venv` are not, and nothing is served through them. The
 reach is the device's folders, minus this server's data and `~/.claude`, as
 everywhere else. Nothing from a project runs on the app's origin: images come
@@ -445,6 +457,11 @@ It opens in a new session too, before the chat's first message: the TUI
 then starts the Claude session under an id the server gives it, and the
 chat continues that conversation. Closed with nothing typed, it leaves no
 conversation, and the chat's first message starts one of its own.
+"chat" in True View's header shows the chat while the terminal keeps
+running. A message typed there is either pasted into the TUI's input (you
+send it with ⏎ there) or, if you choose, closes the terminal and goes to
+the chat; `/clear`, `/compact` and stopping the session warn that they close
+it too.
 
 ## Reverse proxy (Caddy)
 
@@ -731,6 +748,25 @@ node scripts/kbd_test.js <pairing code>   # keyboard shortcuts (Playwright; test
 The `scripts/e2e_*.py` files each exercise one slice end-to-end against a live
 server (resume parity, permission approve/deny, terminal↔webapp sync, Stop-hook
 status feedback).
+
+## Changes
+
+### 1.0.0rc2 (2026-09-27)
+
+- The "/" command list scrolls on a phone again (so do the folder browser and
+  a past session's preview); `/btw`, `/files`, `/compact` and `/rename` come
+  first, `/clear` last.
+- Chat ↔ True View: "chat" in True View's header shows the chat while the
+  terminal keeps running; a message sent from the chat meanwhile can be pasted
+  into True View instead of closing it; stop, `/clear` and `/compact` warn
+  that they close the terminal.
+- Find in the file viewer: *Find*, `/`, ⌘F or Ctrl+F on a text file.
+- CLI: device names starting with "-" work in `devices rename|lock|unlock`
+  and `revoke`.
+
+### 1.0.0rc1 (2026-09-27)
+
+First public release.
 
 ## License
 

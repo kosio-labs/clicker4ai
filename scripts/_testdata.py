@@ -1,5 +1,5 @@
 """Throwaway data directory for the test scripts: C4AI_DATA_DIR under
-.scratch/, set before `server` is imported and removed at exit, so a
+.scratch/, set before `clicker4ai` is imported and removed at exit, so a
 failed run leaves no devices, pairing codes or sessions in the live
 ~/.clicker4ai. Only allowed_roots (~/work) is configured."""
 

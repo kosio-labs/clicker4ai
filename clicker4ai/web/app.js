@@ -1855,10 +1855,18 @@ function shortModel(m) {
 
 // Stop the session's claude process (it resumes on the next message); when
 // stopped from inside the chat, return to the session list. The tab stays.
-async function stopSession(sid) {
-  await T.rpc("sessions.stop", { sid });
-  toast("Stopped");
-  if (S.view?.name === "chat" && S.view.sid === sid) nav({ name: "sessions" });
+// A running True View stops with it, so that is confirmed first; after()
+// runs once the process is stopped.
+async function stopSession(sid, after) {
+  const stop = async () => {
+    await T.rpc("sessions.stop", { sid });
+    toast("Stopped");
+    if (S.view?.name === "chat" && S.view.sid === sid) nav({ name: "sessions" });
+    after?.();
+  };
+  const note = tvNote(sid, "stopping");
+  if (!note) return stop();
+  confirmSheet("Stop process?", note + "History stays; it resumes on the next message.", stop, "Stop");
 }
 
 // The title is the first line ever sent, so renaming is the only way to
@@ -2041,7 +2049,7 @@ function tabMenu(s) {
     !s.incognito && { icon: "✎", label: "Rename", action: () => renameSession(s) },
     forkItem(s),
     s.live && { icon: "■", label: "Stop process", sub: "Keeps history; resumes on next message",
-      action: async () => { await stopSession(s.sid); renderTabs(); } },
+      action: () => stopSession(s.sid, renderTabs) },
     S.canFiles && !s.incognito && { icon: "▤", label: "Files", sub: shortPath(s.cwd),
       action: () => nav({ name: "files", path: s.cwd }) },
     { icon: "✕", label: "Close tab", sub: "Keeps the session; removes it from this switcher",
@@ -2085,7 +2093,7 @@ async function renderProjects() {
 
 async function browseSheet(pick) {
   let current = null;
-  const body = el("div");
+  const body = el("div", { class: "sheet-body" });
   const load = async (path) => {
     const data = await T.rpc("browse", path ? { path } : {});
     current = data.path; // null = list of allowed folders (several roots)
@@ -2259,8 +2267,9 @@ async function renderFiles(path) {
 // A file on a sheet: images as <img>, text as plain text, anything else
 // just its size; every one can be downloaded.
 // Keys: ↑ ↓ j k scroll, space / PgUp / PgDn a page, ← → the previous or
-// next file of the folder, d downloads, ⏎ and esc close. Close holds the
-// focus, so a stray ⏎ never starts a download.
+// next file of the folder, d downloads, ⏎ and esc close, / or ⌘F / Ctrl+F
+// finds in a text file. Close holds the focus, so a stray ⏎ never starts a
+// download.
 // A file named in a tool card (Read, Edit, Write…), in the file viewer with
 // its folder's files for ← →; the server checks it is in the device's folders.
 async function openFileAt(path, cwd) {
@@ -2315,6 +2324,81 @@ function imageView(f, body) {
   return [wrap, info];
 }
 
+// Find in a text file on the viewer: a bar that sticks to the top of the
+// sheet, matches as <mark> (case-insensitive, the first FIND_MAX), ⏎ / ⇧⏎
+// or ↓ ↑ from one to the next, esc closes the bar, not the viewer.
+const FIND_MAX = 2000;
+function textFinder(text, pre) {
+  const input = el("input", { type: "text", placeholder: "Find in file…", enterkeyhint: "search",
+    autocapitalize: "off", autocorrect: "off", spellcheck: "false" });
+  const count = el("span", { class: "ff-count" });
+  const btn = (label, aria, fn) => el("button", { class: "btn small", "aria-label": aria, onclick: fn }, label);
+  const bar = el("div", { class: "file-find", style: "display:none" }, input, count,
+    btn("↑", "Previous match", () => go(-1)), btn("↓", "Next match", () => go(1)),
+    btn("✕", "Close find", () => close()));
+  let marks = [], cur = -1, timer = 0;
+  const label = () => {
+    count.textContent = !input.value ? "" : !marks.length ? "none"
+      : `${cur + 1}/${marks.length}${marks.length >= FIND_MAX ? "+" : ""}`;
+  };
+  const go = (d) => {
+    if (!marks.length) return;
+    marks[cur]?.classList.remove("cur");
+    cur = (cur + d + marks.length) % marks.length;
+    marks[cur].classList.add("cur");
+    marks[cur].scrollIntoView({ block: "center" });
+    label();
+  };
+  const run = () => {
+    const q = input.value;
+    marks = []; cur = -1;
+    if (!q) { pre.textContent = text; label(); return; }
+    // a RegExp with "i", not toLowerCase(): lowering may change the length
+    // of some characters and shift every index after them
+    const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
+    const frag = document.createDocumentFragment();
+    let at = 0, m;
+    while (marks.length < FIND_MAX && (m = re.exec(text))) {
+      frag.append(text.slice(at, m.index));
+      const mark = el("mark", null, m[0]);
+      marks.push(mark);
+      frag.append(mark);
+      at = m.index + m[0].length;
+    }
+    frag.append(text.slice(at));
+    pre.replaceChildren(frag);
+    go(1);
+    label();
+  };
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => { timer = 0; run(); }, 150);
+  });
+  input.addEventListener("keydown", (e) => {
+    const act = { Enter: () => go(e.shiftKey ? -1 : 1), ArrowDown: () => go(1),
+      ArrowUp: () => go(-1), Escape: close }[e.key];
+    if (!act || e.isComposing) return;
+    e.preventDefault();
+    e.stopPropagation();   // esc and ⏎ must not reach the viewer's keys
+    // ⏎ before the search ran: search now, which lands on the first match
+    if (timer) { clearTimeout(timer); timer = 0; run(); if (e.key !== "Escape") return; }
+    act();
+  });
+  function close() {
+    clearTimeout(timer);
+    bar.style.display = "none";
+    input.value = "";
+    run();
+    input.blur();
+  }
+  const open = () => {
+    bar.style.display = "";
+    input.focus();
+    input.select();
+  };
+  return { bar, open };
+}
+
 async function fileSheet(f, siblings = []) {
   const body = el("div", { class: "sheet-body" });
   const dl = el("a", { class: "btn", href: fileUrl(f.path, true), download: f.name }, "Download", kHint("d"));
@@ -2348,6 +2432,7 @@ async function fileSheet(f, siblings = []) {
       Home: () => body.scrollTo(0, 0), End: () => body.scrollTo(0, body.scrollHeight),
       ArrowRight: () => step(1), ArrowLeft: () => step(-1),
       d: () => dl.click(), Enter: closeSheet,
+      "/": S.sheetFind || undefined,
     }[key];
     if (act) act();
     return !!act;
@@ -2357,8 +2442,12 @@ async function fileSheet(f, siblings = []) {
     const r = await T.rpc("files.text", { path: f.path });
     if (!body.isConnected) return;
     if (r.binary) { show(el("div", { class: "notice" }, "Not a text file — download it to open.")); return; }
-    show(el("pre", { class: "file-text" }, r.text),
+    const pre = el("pre", { class: "file-text" }, r.text);
+    const finder = textFinder(r.text, pre);
+    show(finder.bar, pre,
       r.truncated ? el("div", { class: "notice warn" }, `First ${fmtBytes(r.text.length)} only — download for the rest.`) : null);
+    S.sheetFind = finder.open;
+    foot.prepend(el("button", { class: "btn", onclick: finder.open }, "Find", kHint("/")));
   } catch (e) {
     if (body.isConnected) show(el("div", { class: "notice error" }, e.message));
   }
@@ -2437,7 +2526,7 @@ function renamePastSession(path, ps) {
 }
 
 function pastSessionSheet(path, ps, opts) {
-  const body = el("div");
+  const body = el("div", { class: "sheet-col" });
   body.append(
     el("div", { class: "sheet-title" }, ps.summary),
     el("div", { style: "font-family:var(--mono);font-size:11px;color:var(--dim);margin:-6px 0 8px" },
@@ -2612,7 +2701,12 @@ function renderChat(sid) {
     el("button", { class: "c-btn", onclick: () => palette(sid) }, "/"),
     input, sendBtn);
 
-  $("#view").replaceChildren(el("div", { id: "chat-wrap" }, msgs, statusLine, composer));
+  // while True View runs, the chat is a look back: a way back to the terminal
+  const tvBar = el("div", { id: "tv-bar", class: s?.terminal ? "" : "hidden" },
+    el("span", null, "True View is running"),
+    el("button", { onclick: () => openTrueView(sid) }, "back to True View"));
+
+  $("#view").replaceChildren(el("div", { id: "chat-wrap" }, msgs, statusLine, tvBar, composer));
   if (input.value) input.dispatchEvent(new Event("input"));   // a restored draft: size the box
 
   if (S.events[sid]) renderChatTranscript(sid);
@@ -2633,11 +2727,42 @@ function sendOrStop(fromKeyboard) {
   }
   if (!text) return;
   if (handleLocalCommand(sid, text)) { input.value = ""; input.style.height = "auto"; setDraft(sid, ""); return; }
+  if (currentSession()?.terminal) { tvSendSheet(sid, text, fromKeyboard); return; }
+  sendText(sid, text, fromKeyboard);
+}
+
+function sendText(sid, text, fromKeyboard) {
+  const input = $("#chat-input");
   if (wsSend({ type: "send", session_id: sid, text })) {
     pendingSend[sid] = text;   // dropped as soon as the server accepts it
-    input.value = ""; input.style.height = "auto"; setDraft(sid, "");
-    if (!fromKeyboard) input.blur();
+    setDraft(sid, "");
+    if (input) {   // gone if the view changed while the sheet was open
+      input.value = ""; input.style.height = "auto";
+      if (!fromKeyboard) input.blur();
+    }
   }
+}
+
+// A message from the chat would close a running True View (the server does
+// that: two processes must not resume one transcript) and cut off a turn
+// in progress there, so the chat asks first. Pasting leaves the text in
+// the TUI's input box, to be sent with ⏎ there.
+function tvSendSheet(sid, text, fromKeyboard) {
+  sheet("True View is running", [
+    // the default: the terminal stays as it is, nothing is restarted
+    { icon: ">_", label: "Paste into True View", sub: "Send it there with ⏎", primary: true,
+      action: () => { termUI.paste = { sid, text, at: Date.now() }; openTrueView(sid); } },
+    { icon: "↑", label: "Close True View and send here",
+      sub: "A turn running in the terminal is cut off",
+      action: () => sendText(sid, text, fromKeyboard) },
+    { icon: "✕", label: "Cancel" },
+  ]);
+}
+
+// the note leading /clear, /compact and stop while True View is running
+function tvNote(sid, what) {
+  return S.sessions.find((x) => x.sid === sid)?.terminal
+    ? `True View is running: ${what} closes it, and a turn in progress there is cut off. ` : "";
 }
 
 // Text the server has not acknowledged yet, keyed by session. The runner
@@ -2718,6 +2843,7 @@ function updateChatHeader() {
   if (title) title.textContent = s.title || "session";
   const tv = $("#hdr-tv");
   if (tv) tv.replaceChildren(...tvBtnContent(s));
+  $("#tv-bar")?.classList.toggle("hidden", !s.terminal);
   if (sub) {
     const ctx = S.context[s.sid];
     const bits = [s.project, shortModel((S.meta[s.sid] || {}).model || s.model)];
@@ -2758,7 +2884,8 @@ function updateStatusLine() {
 // here; xterm.js renders the actual terminal UI, so this view mirrors Claude
 // Code exactly. The PTY survives leaving the view — reattach replays scrollback.
 
-const termUI = { sid: null, ws: null, term: null, cleanup: null, ending: false, gen: 0, slowAt: 0 };
+const termUI = { sid: null, ws: null, term: null, cleanup: null, ending: false, gen: 0, slowAt: 0,
+  paste: null };   // { sid, text }: typed in the chat, for the TUI's input
 
 const _assets = {};
 function loadAsset(url, kind) {
@@ -2867,6 +2994,8 @@ function renderTerm(sid) {
           else openChat(sid);
         });
       } }, "end"),
+      // a look at the chat leaves the terminal running (>_ there comes back)
+      el("button", { class: "tb-btn tb-text", "aria-label": "Chat", onclick: () => openChat(sid) }, "chat"),
       tabsBtn(),
       el("button", { class: "tb-btn", onclick: () => infoSheet(sid) }, "ⓘ")),
   );
@@ -2919,6 +3048,19 @@ function openTerm(sid, mount, overlay) {
     fit.fit(); sendResize(); term.focus();
   };
   ws.onmessage = (e) => {
+    // text sent from the chat goes in once the TUI shows (the first bytes)
+    if (typeof e.data !== "string" && termUI.paste?.sid === sid) {
+      const { text, at } = termUI.paste;
+      termUI.paste = null;
+      // a terminal that did not come up keeps it in the chat's draft instead
+      if (Date.now() - at < 30000) {
+        // bracketed paste written here, not term.paste(): the capped scrollback
+        // may have lost the TUI's mode switch, and a bare newline would submit
+        ws.send(JSON.stringify({ type: "input",
+          data: "\u001b[200~" + text.replace(/\r?\n/g, "\r") + "\u001b[201~" }));
+        setDraft(sid, "");
+      }
+    }
     if (typeof e.data === "string") {
       let msg; try { msg = JSON.parse(e.data); } catch { return; }
       if (msg.type === "exit") {
@@ -3464,17 +3606,18 @@ function palette(sid) {
   // your own commands (~/.claude/commands) stay; the CLI list does not say
   // which of its entries are skills, so everything else is filtered by name
   const own = new Set((S.library?.commands || []).filter((c) => c.scope === "user").map((c) => c.name));
+  // most used first; /clear last, so a stray tap at the top cannot wipe the context
   const appCmds = [
-    { name: "clear", desc: "Start fresh context in this chat", act: () => confirmClear(sid) },
-    { name: "compact", desc: "Summarize old messages to free context", act: () => confirmCompact(sid) },
     { name: "btw", desc: "Side question, kept out of the conversation", act: () => btwSheet(sid) },
+    S.canFiles && { name: "files", desc: "Browse this project's files", act: () => openFiles(sid) },
+    { name: "compact", desc: "Summarize old messages to free context", act: () => confirmCompact(sid) },
+    { name: "rename", desc: "Rename this session",
+      act: () => renameSession(S.sessions.find((x) => x.sid === sid) || { sid }) },
     { name: "model", desc: "Change model", act: () => modelSheet(sid) },
     { name: "mode", desc: "Change permission mode", act: () => modeSheet(sid) },
     { name: "info", desc: "Session info, context, MCP status", act: () => infoSheet(sid) },
-    { name: "rename", desc: "Rename this session",
-      act: () => renameSession(S.sessions.find((x) => x.sid === sid) || { sid }) },
     { name: "library", desc: "Skills, commands, agents, MCP", act: () => nav({ name: "skills" }) },
-    S.canFiles && { name: "files", desc: "Browse this project's files", act: () => openFiles(sid) },
+    { name: "clear", desc: "Start fresh context in this chat", act: () => confirmClear(sid) },
   ].filter((c) => c && (!incognito || !INCOGNITO_HIDDEN.has(c.name)));
   const skip = new Set(["clear", "compact", "btw", "model", "info", "context", "library",
     "login", "logout", "quit", "exit", "resume", "help", "doctor", "ide", "vim",
@@ -3490,7 +3633,7 @@ function palette(sid) {
       insert: true,
     }));
 
-  const body = el("div");
+  const body = el("div", { class: "sheet-col" });
   const search = el("input", { type: "search", placeholder: "Filter commands…" });
   const list = el("div", { class: "sheet-body" });
 
@@ -3527,7 +3670,7 @@ function palette(sid) {
 }
 
 function confirmClear(sid) {
-  confirmSheet("Clear conversation?", "Context resets to zero. The transcript stays visible above the divider.", () => {
+  confirmSheet("Clear conversation?", tvNote(sid, "clearing") + "Context resets to zero. The transcript stays visible above the divider.", () => {
     wsSend({ type: "clear", session_id: sid });
   });
 }
@@ -3535,7 +3678,7 @@ function confirmClear(sid) {
 // compacting replaces the conversation with a summary for good, so a
 // stray tap in the palette must not do it on its own
 function confirmCompact(sid, instructions = "") {
-  confirmSheet("Compact conversation?", "Older messages are replaced by a summary. This cannot be undone.", () => {
+  confirmSheet("Compact conversation?", tvNote(sid, "compacting") + "Older messages are replaced by a summary. This cannot be undone.", () => {
     wsSend({ type: "compact", session_id: sid, instructions });
   });
 }
@@ -3833,16 +3976,27 @@ function sheet(title, items, head) {
   const body = el("div", { class: "sheet-body" });
   if (title) body.append(el("div", { class: "sheet-title" }, title));
   if (head) body.append(...head);
+  let primary = null;
   for (const it of items) {
     if (!it) continue;
-    body.append(el("button", { class: "sheet-item" + (it.danger ? " danger" : ""), onclick: async () => {
+    const btn = el("button", { class: "sheet-item" + (it.danger ? " danger" : "") + (it.primary ? " primary" : ""), onclick: async () => {
       closeSheet();
       try { await it.action?.(); } catch (e) { toast(e.message, true); }
     } },
       el("span", { class: "si-icon" }, it.icon || ""),
-      el("div", { class: "si-main" }, it.label, it.sub ? el("div", { class: "si-sub" }, it.sub) : null)));
+      el("div", { class: "si-main" }, it.label, it.sub ? el("div", { class: "si-sub" }, it.sub) : null));
+    if (it.primary) primary = btn;
+    body.append(btn);
   }
   rawSheet(body);
+  // the default item: ⏎ takes it with a keyboard, after the grace period so
+  // the ⏎ that opened the sheet does not also choose (as confirmSheet)
+  if (!primary || !finePointer()) return;
+  setTimeout(() => {
+    if (!primary.isConnected) return;
+    kbd.cur = primary;
+    primary.focus();
+  }, KBD_GRACE);
 }
 
 // With a keyboard, Confirm takes the focus after the approval cards' grace
@@ -3877,7 +4031,7 @@ function confirmSheet(title, subtitle, action, danger) {
 }
 
 function closeSheet() {
-  S.sheetKeys = null;
+  S.sheetKeys = S.sheetFind = null;
   $("#sheet-root").replaceChildren();
   if (S.viewerOpen) {   // closed by Close, esc, a tap outside, a swipe or another sheet
     S.viewerOpen = false;
@@ -4069,6 +4223,7 @@ function keysSheet() {
     ["Allow · Always · Deny · Deny with note", "1 y · 2 · 3 n · 4"],
     ["answer a question · plan choice", "1–9"],
     ["file: scroll · page · prev/next · download · close", "↑ ↓ · space · ← → · d · ⏎"],
+    ["file: find in the text · next / previous match", "/ or ⌘F · ⏎ / ⇧⏎"],
   ];
   rawSheet(el("div", { class: "sheet-body" },
     el("div", { class: "sheet-title" }, "Keyboard shortcuts"),
@@ -4087,6 +4242,11 @@ document.addEventListener("keydown", (e) => {
     if (overlayOpen()) { closeSheet(); closeDrawer(); }
     else if (isTyping(t)) t.blur();
     return;
+  }
+  // ⌘F / Ctrl+F in the file viewer opens its own search, not the browser's
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "f"
+      && S.sheetFind && $("#sheet-root").children.length) {
+    e.preventDefault(); S.sheetFind(); return;
   }
   if (e.defaultPrevented || e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
   if (isTyping(t)) {

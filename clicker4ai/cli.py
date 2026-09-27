@@ -867,12 +867,16 @@ def main(argv: list[str] | None = None) -> None:
     # `serve` is the default: bare flags (or nothing) mean serve.
     if not argv or (argv[0] not in commands and argv[0] not in ("-h", "--help")):
         argv.insert(0, "serve")
-    # A passkey id is base64url, so about one in 64 starts with "-" and
-    # argparse would take it (or a new name like "-old") for an option.
-    # These subcommands take no options, so everything after them is data.
-    if (argv[:1] == ["passkeys"] and argv[1:2] in (["remove"], ["rename"])
-            and not {"-h", "--help", "--"} & set(argv[2:])):
-        argv.insert(2, "--")
+    # A passkey id is base64url, so about one in 64 starts with "-", and a
+    # passkey or device name may too ("-old"); argparse would take either for
+    # an option. These subcommands take no options, so everything after them
+    # is data.
+    for cmd in (["passkeys", "remove"], ["passkeys", "rename"], ["devices", "rename"],
+                ["devices", "lock"], ["devices", "unlock"], ["revoke"]):
+        n = len(cmd)
+        if argv[:n] == cmd and not {"-h", "--help", "--"} & set(argv[n:]):
+            argv.insert(n, "--")
+            break
 
     parser = argparse.ArgumentParser(
         prog="c4ai",
