@@ -35,6 +35,30 @@ function relTime(ms) {
   return Math.floor(d / 86400e3) + "d";
 }
 
+// A session's last activity, green while its prompt cache is likely warm:
+// the next message then reads the cache instead of rewriting the whole
+// context. Assumes the 1 h TTL; in usage overage it drops to 5 min, which
+// the app cannot see. `hasCtx` false (nothing sent yet) means no cache.
+const CACHE_TTL_MS = 3600e3;
+const isWarm = (ms) => !!ms && Date.now() - ms < CACHE_TTL_MS;
+
+function ageSpan(ms, hasCtx) {
+  const span = el("span", { class: "age", "data-ts": String(ms || 0) });
+  if (hasCtx) span.dataset.cache = "1";
+  return paintAge(span);
+}
+
+// the one place the text and the green are decided, at render and per tick
+function paintAge(span) {
+  const ms = Number(span.dataset.ts);
+  span.textContent = relTime(ms);
+  span.classList.toggle("warm", !!span.dataset.cache && isWarm(ms));
+  return span;
+}
+
+// the times on screen age without a re-render (and the green runs out)
+setInterval(() => document.querySelectorAll(".age[data-ts]").forEach(paintAge), 60e3);
+
 // rate-limit windows as the SDK names them
 const USAGE_WINDOWS = {
   five_hour: "5h window",
@@ -510,7 +534,15 @@ function applyEventToState(sid, ev) {
       break;
     case "meta": S.meta[sid] = { ...(S.meta[sid] || {}), ...ev }; break;
     case "commands": S.meta[sid] = { ...(S.meta[sid] || {}), commands: ev.commands }; break;
-    case "context": S.context[sid] = ev; if (S.view?.name === "chat" && S.view.sid === sid) updateChatHeader(); break;
+    case "context": {
+      S.context[sid] = ev;
+      // an SDK figure is current: the snapshot (which ctxOf prefers) takes
+      // it now rather than at the next sessions update
+      const s = S.sessions.find((x) => x.sid === sid);
+      if (s) { s.context_tokens = ev.total_tokens; s.context_pct = ev.percentage; }
+      if (S.view?.name === "chat" && S.view.sid === sid) updateChatHeader();
+      break;
+    }
     case "btw": S.btw[sid] = ev.items || []; btwUI.draw?.(sid); break;
     // "edit from here": what this client holds from from_seq on is gone
     case "rewound":
@@ -707,16 +739,21 @@ function tabAwaiting(sid) {
   return sid !== cur && S.tabs.includes(sid) && S.status[sid]?.state === "awaiting";
 }
 
-// The Tabs button pulses for such a tab unless its session card (home,
-// sessions list) is actually on screen — then the card pulses instead
+// Everything that stands for one session and pulses with it: the session
+// cards (home, sessions list), the Tabs cards and a project's past sessions
+// held by a runner
+const SESSION_ROWS = ".s-card[data-sid], .tab-card[data-sid], .item[data-sid]";
+
+// The Tabs button pulses for such a tab unless a row of that session is
+// actually on screen — then the row pulses instead
 function tabsAwaiting() {
-  const seen = new Set([...document.querySelectorAll(".s-card[data-sid]")]
+  const seen = new Set([...document.querySelectorAll(SESSION_ROWS)]
     .filter((c) => c._seen).map((c) => c.dataset.sid));
   return S.tabs.some((sid) => tabAwaiting(sid) && !seen.has(sid));
 }
 
 function updateTabsAlert() {
-  for (const c of document.querySelectorAll(".s-card[data-sid]")) c.classList.toggle("alert", tabAwaiting(c.dataset.sid));
+  for (const c of document.querySelectorAll(SESSION_ROWS)) c.classList.toggle("alert", tabAwaiting(c.dataset.sid));
   const on = tabsAwaiting();
   for (const b of document.querySelectorAll(".tabs-btn")) b.classList.toggle("alert", on);
 }
@@ -730,7 +767,7 @@ function observeCards() {
     for (const e of entries) e.target._seen = e.isIntersecting;
     updateTabsAlert();
   }, { threshold: 0.5 });
-  for (const c of document.querySelectorAll("#view .s-card[data-sid]")) cardObserver.observe(c);
+  for (const c of document.querySelectorAll("#view :is(" + SESSION_ROWS + ")")) cardObserver.observe(c);
 }
 
 function updateConnUI() {
@@ -764,12 +801,12 @@ function render() {
 // ---------------------------------------------------------------- drawer
 
 const NAV_TABS = [
-  { name: "skills", label: "Skills", icon: "◆" },
-  { name: "commands", label: "Commands", icon: "⌘" },
-  { name: "agents", label: "Agents", icon: "⑃" },
-  { name: "mcp", label: "MCPs", icon: "⚡" },
   { name: "sessions", label: "Sessions", icon: "❯" },
   { name: "projects", label: "Projects", icon: "▤" },
+  { name: "agents", label: "Agents", icon: "⑃" },
+  { name: "commands", label: "Commands", icon: "⌘" },
+  { name: "mcp", label: "MCPs", icon: "⚡" },
+  { name: "skills", label: "Skills", icon: "◆" },
 ];
 
 function navCount(name) {
@@ -809,7 +846,8 @@ function openDrawer() {
         S.passkeyDevice
           ? "The device is removed from the server. To keep its folders, lock it instead."
           : "The device is removed from the server; you will need a pairing code next time.",
-        doLogout) }, "sign out"))));
+        doLogout) }, "sign out")),
+    legalLine()));
   $("#drawer-root").append(backdrop);
   setMenuBtn(true);
   loadLibrary().then(() => {
@@ -970,9 +1008,11 @@ async function renderSdk(check) {
 // ---------------------------------------------------------------- shared components
 
 // Large, readable list row. side may be a string or array of lines.
-function bigItem({ icon, title, badge, sub, side, mono, onclick, key }) {
+function bigItem({ icon, title, badge, sub, side, mono, onclick, key, sid }) {
   const sides = side == null ? [] : (Array.isArray(side) ? side : [side]).filter(Boolean);
-  return el("button", { class: "item", onclick, "data-kbd": key },
+  // sid: the row stands for that session and pulses with it (SESSION_ROWS)
+  return el("button", { class: "item" + (sid && tabAwaiting(sid) ? " alert" : ""), onclick,
+    "data-kbd": key, "data-sid": sid || null },
     icon ? el("span", { class: "item-icon" }, icon) : null,
     el("div", { class: "item-main" },
       el("div", { class: "item-title" + (mono ? " mono" : "") },
@@ -1013,10 +1053,29 @@ const shortPath = (p) => (p || "").replace(S.home, "~");
 
 // ---------------------------------------------------------------- login
 
+// AGPL §5(d) "Appropriate Legal Notices" for the app's own screens (menu,
+// login, lock, passkey gate). A fork that runs modified code for others
+// points "source code" at its own repository (§13). The version is unknown
+// until the first hello.
+const SOURCE_URL = "https://github.com/kosio-labs/clicker4ai";
+function legalLine() {
+  const link = (href, text) => el("a", { href, target: "_blank", rel: "noopener" }, text);
+  return el("div", { class: "legal-line" },
+    el("div", null, "Clicker4AI" + (S.serverVersion ? " " + S.serverVersion : "") + " · © 2026 ",
+      link("https://github.com/kosio-labs", "Kosio")),
+    el("div", null, link(SOURCE_URL + "/blob/main/LICENSE", "AGPL-3.0"), ", no warranty · ",
+      link(SOURCE_URL, "source code")));
+}
+
+// A full-screen box (login, lock, gate) with the legal line at the bottom.
+function gateView(box) {
+  $("#view").replaceChildren(el("div", { class: "gate-screen" }, box, legalLine()));
+}
+
 function renderLogin() {
   setTopbar();
   const onEnter = (e) => { if (e.key === "Enter") doLogin(); };
-  $("#view").replaceChildren(
+  gateView(
     el("div", { class: "login-box" },
       el("div", { class: "glyph" }, "❯_"),
       el("h1", null, "Clicker4AI"),
@@ -1264,7 +1323,7 @@ function showLock() {
 
 function renderLock() {
   setTopbar();
-  $("#view").replaceChildren(
+  gateView(
     el("div", { class: "login-box" },
       el("div", { class: "glyph" }, "⚿"),
       el("h1", null, "Locked"),
@@ -1326,7 +1385,7 @@ function renderPasskeyGate() {
     signOutButton(),
     el("div", { class: "login-err", id: "login-err" }),
     el("p", { class: "quiet", id: "gate-help" }));
-  $("#view").replaceChildren(box);
+  gateView(box);
   loadPasskeyStatus().then((st) => {
     const slot = $("#gate-action");
     if (!slot) return;
@@ -1809,7 +1868,7 @@ function sessionCard(s) {
   }
 
   const metaBits = [procLabel(s, st), ...sizeBits(s, true)];
-  metaBits.push(el("span", null, relTime(s.last_active)));
+  metaBits.push(ageSpan(s.last_active, !!s.context_tokens));
 
   return el("button", { class: "card s-card" + (tabAwaiting(s.sid) ? " alert" : ""),
     "data-kbd": s.sid, "data-sid": s.sid, onclick: () => openSession(s) },
@@ -1842,10 +1901,30 @@ function sizeBits(s, withCost) {
   const bits = [];
   if (s.model && s.model !== "default") bits.push(el("span", null, shortModel(s.model)));
   if (withCost && s.cost_usd) bits.push(el("span", null, fmtCost(s.cost_usd)));
-  const size = fmtTokens(s.context_tokens);
-  if (s.context_pct != null) bits.push(el("span", null, `ctx ${Math.round(s.context_pct)}%` + (size ? ` · ${size}` : "")));
-  else if (size) bits.push(el("span", null, `ctx ${size}`));
+  const label = ctxLabel(ctxOf(s));
+  if (label) bits.push(el("span", null, label));
   return bits;
+}
+
+// The session's context. The snapshot carries the server's best figure —
+// the SDK's while it is current, the transcript's once a terminal has
+// driven the session or it is stopped — so it wins over the last SDK event
+// this page saw, which is only the fallback until the next sessions update.
+// The window size comes from that event alone.
+function ctxOf(s) {
+  const live = S.context[s?.sid];
+  return {
+    tokens: s?.context_tokens ?? live?.total_tokens,
+    pct: s?.context_pct ?? live?.percentage,
+    max: live?.max_tokens,
+  };
+}
+
+// "ctx 41% · 89k", "ctx 89k", or "" with nothing known
+function ctxLabel({ tokens, pct }) {
+  const size = fmtTokens(tokens);
+  if (pct != null) return `ctx ${Math.round(pct)}%` + (size ? ` · ${size}` : "");
+  return size ? `ctx ${size}` : "";
 }
 
 function shortModel(m) {
@@ -1963,6 +2042,7 @@ function renderTabs() {
   wrap.append(el("div", { style: "height:90px" }));
   view.replaceChildren(wrap);
   view.append(el("button", { class: "fab", onclick: () => nav({ name: "projects" }) }, "+"));
+  observeCards();
 }
 
 // Process state label for session/tab cards: working (turn in progress),
@@ -1983,8 +2063,9 @@ function tabCard(s) {
   const busy = ["working", "awaiting", "starting", "compacting"].includes(st.state);
   const body = s.incognito ? incognitoPreview(st, busy)
     : busy ? (st.detail || st.state) : (s.last_msg?.text || "no messages yet");
-  return el("button", { class: "tab-card" + (s.sid === S.lastTab ? " on" : ""),
-    "data-kbd": s.sid, onclick: () => openSession(s) },
+  return el("button", { class: "tab-card" + (s.sid === S.lastTab ? " on" : "")
+    + (tabAwaiting(s.sid) ? " alert" : ""),
+    "data-kbd": s.sid, "data-sid": s.sid, onclick: () => openSession(s) },
     el("div", { class: "tc-head" },
       el("span", { class: "dot " + st.state }),
       el("span", { class: "tc-title" }, s.title || "(new session)"),
@@ -1997,7 +2078,7 @@ function tabCard(s) {
     el("div", { class: "tc-meta" },
       procLabel(s, st),
       ...sizeBits(s, false),
-      el("span", null, relTime(s.last_active))));
+      ageSpan(s.last_active, !!s.context_tokens)));
 }
 
 // A busy tab is one whose turn is still running or waiting for an approval:
@@ -2184,15 +2265,17 @@ async function renderProject(path) {
         title: ps.summary,
         badge: held ? el("span", { class: "badge" }, "in sessions") : null,
         sub: [ps.git_branch, pastSize(ps), (ps.session_id || "").slice(0, 8)].filter(Boolean).join(" · "),
-        side: relTime(ps.last_modified_ms),
+        side: ageSpan(ps.last_modified_ms, !!ps.context_tokens),
         onclick: () => {
           if (!held) { pastSessionSheet(path, ps, opts); return; }
           const s = S.sessions.find((x) => x.sid === held);
           if (s) openSession(s); else openChat(held);
         },
         key: ps.session_id,
+        sid: held || null,
       }));
     }
+    observeCards();
   } catch (e) {
     const list = $("#past-list");
     if (list) list.replaceChildren(el("div", { class: "notice error" }, "Could not list sessions: " + e.message));
@@ -2324,12 +2407,14 @@ function imageView(f, body) {
   return [wrap, info];
 }
 
-// Find in a text file on the viewer: a bar that sticks to the top of the
-// sheet, matches as <mark> (case-insensitive, the first FIND_MAX), ⏎ / ⇧⏎
-// or ↓ ↑ from one to the next, esc closes the bar, not the viewer.
+// A find bar: the matches as <mark class="find-mark"> (case-insensitive, the
+// first FIND_MAX), ⏎ / ⇧⏎ or ↓ ↑ from one to the next, esc closes the bar
+// (not the viewer or the chat). search(q) marks the matches of q, or clears
+// them for "", and returns the marks in document order; `newestFirst`
+// starts at the last one (the chat, read from the bottom).
 const FIND_MAX = 2000;
-function textFinder(text, pre) {
-  const input = el("input", { type: "text", placeholder: "Find in file…", enterkeyhint: "search",
+function findBar({ placeholder, search, newestFirst }) {
+  const input = el("input", { type: "text", placeholder, enterkeyhint: "search",
     autocapitalize: "off", autocorrect: "off", spellcheck: "false" });
   const count = el("span", { class: "ff-count" });
   const btn = (label, aria, fn) => el("button", { class: "btn small", "aria-label": aria, onclick: fn }, label);
@@ -2343,31 +2428,19 @@ function textFinder(text, pre) {
   };
   const go = (d) => {
     if (!marks.length) return;
+    const next = (cur + d + marks.length) % marks.length;
+    // re-rendered under the bar (a chat reloaded, a reply streamed in)
+    if (!marks[next].isConnected) { run(); return; }
     marks[cur]?.classList.remove("cur");
-    cur = (cur + d + marks.length) % marks.length;
+    cur = next;
     marks[cur].classList.add("cur");
     marks[cur].scrollIntoView({ block: "center" });
     label();
   };
   const run = () => {
-    const q = input.value;
-    marks = []; cur = -1;
-    if (!q) { pre.textContent = text; label(); return; }
-    // a RegExp with "i", not toLowerCase(): lowering may change the length
-    // of some characters and shift every index after them
-    const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
-    const frag = document.createDocumentFragment();
-    let at = 0, m;
-    while (marks.length < FIND_MAX && (m = re.exec(text))) {
-      frag.append(text.slice(at, m.index));
-      const mark = el("mark", null, m[0]);
-      marks.push(mark);
-      frag.append(mark);
-      at = m.index + m[0].length;
-    }
-    frag.append(text.slice(at));
-    pre.replaceChildren(frag);
-    go(1);
+    marks = search(input.value);
+    cur = newestFirst && marks.length ? 0 : -1;
+    go(newestFirst ? -1 : 1);
     label();
   };
   input.addEventListener("input", () => {
@@ -2397,6 +2470,73 @@ function textFinder(text, pre) {
     input.select();
   };
   return { bar, open };
+}
+
+// a RegExp with "i", not toLowerCase(): lowering may change the length of
+// some characters and shift every index after them
+function findRe(q) {
+  return new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
+}
+
+// text with its matches wrapped in marks (pushed onto `marks`); null when
+// nothing matched
+function markMatches(text, re, marks) {
+  const frag = document.createDocumentFragment();
+  let at = 0, m;
+  re.lastIndex = 0;
+  while (marks.length < FIND_MAX && (m = re.exec(text))) {
+    frag.append(text.slice(at, m.index));
+    const mark = el("mark", { class: "find-mark" }, m[0]);
+    marks.push(mark);
+    frag.append(mark);
+    at = m.index + m[0].length;
+  }
+  if (!at) return null;
+  frag.append(text.slice(at));
+  return frag;
+}
+
+// Find in a text file on the viewer; the bar sticks to the top of the sheet
+function textFinder(text, pre) {
+  return findBar({ placeholder: "Find in file…", search: (q) => {
+    const marks = [];
+    const frag = q ? markMatches(text, findRe(q), marks) : null;
+    if (frag) pre.replaceChildren(frag); else pre.textContent = text;
+    return marks;
+  } });
+}
+
+// Find in the chat: your messages and Claude's replies, not thinking or tool
+// output. A match must sit in one text node, so a phrase split by
+// formatting ("foo **bar**") is not found. Older messages the server did
+// not send ("… older messages not shown") are not searched either.
+function chatFinder() {
+  let marks = [];
+  const unmark = () => {
+    for (const m of marks) {
+      if (!m.isConnected) continue;
+      const parent = m.parentNode;
+      m.replaceWith(m.textContent);
+      parent.normalize();
+    }
+    marks = [];
+  };
+  return findBar({ placeholder: "Find in chat…", newestFirst: true, search: (q) => {
+    unmark();
+    if (!q || !chatUI.msgs) return marks;
+    const re = findRe(q);
+    const nodes = [];
+    for (const msg of chatUI.msgs.querySelectorAll(".msg.m-user, .msg.m-assist")) {
+      const walk = document.createTreeWalker(msg, NodeFilter.SHOW_TEXT);
+      for (let n; (n = walk.nextNode());) if (!n.parentElement.closest(".m-edit")) nodes.push(n);
+    }
+    for (const n of nodes) {
+      if (marks.length >= FIND_MAX) break;
+      const frag = markMatches(n.data, re, marks);
+      if (frag) n.replaceWith(frag);
+    }
+    return marks;
+  } });
 }
 
 async function fileSheet(f, siblings = []) {
@@ -2667,8 +2807,8 @@ function renderChat(sid) {
       // never in an incognito chat (the server refuses it too)
       S.canTerminal && !s?.incognito ? el("button", { class: "tb-btn tb-text" + (s?.terminal ? " tv-on" : ""), id: "hdr-tv",
         "aria-label": "True View (terminal)", onclick: () => openTrueView(sid) }, ...tvBtnContent(s)) : null,
-      tabsBtn(),
-      el("button", { class: "tb-btn", onclick: () => infoSheet(sid) }, "ⓘ"))
+      el("button", { class: "tb-btn", onclick: () => infoSheet(sid) }, "ⓘ"),
+      tabsBtn())
   );
 
   const msgs = el("div", { id: "msgs" });
@@ -2706,7 +2846,9 @@ function renderChat(sid) {
     el("span", null, "True View is running"),
     el("button", { onclick: () => openTrueView(sid) }, "back to True View"));
 
-  $("#view").replaceChildren(el("div", { id: "chat-wrap" }, msgs, statusLine, tvBar, composer));
+  chatUI.find = chatFinder();
+  chatUI.find.bar.classList.add("chat-find");
+  $("#view").replaceChildren(el("div", { id: "chat-wrap" }, chatUI.find.bar, msgs, statusLine, tvBar, composer));
   if (input.value) input.dispatchEvent(new Event("input"));   // a restored draft: size the box
 
   if (S.events[sid]) renderChatTranscript(sid);
@@ -2817,6 +2959,7 @@ function handleLocalCommand(sid, text) {
     case "model": modelSheet(sid); return true;
     case "mode": case "permissions": modeSheet(sid); return true;
     case "info": case "context": infoSheet(sid); return true;
+    case "find": chatUI.find?.open(); return true;
     case "term": case "terminal": case "trueview": openTrueView(sid); return true;
     case "library": case "skills": nav({ name: "skills" }); return true;
     // without the grant a project's own /files command still goes through
@@ -2845,10 +2988,7 @@ function updateChatHeader() {
   if (tv) tv.replaceChildren(...tvBtnContent(s));
   $("#tv-bar")?.classList.toggle("hidden", !s.terminal);
   if (sub) {
-    const ctx = S.context[s.sid];
-    const bits = [s.project, shortModel((S.meta[s.sid] || {}).model || s.model)];
-    if (ctx?.percentage != null) bits.push(`ctx ${Math.round(ctx.percentage)}%`
-      + (ctx.total_tokens ? ` · ${fmtTokens(ctx.total_tokens)}` : ""));
+    const bits = [s.project, shortModel((S.meta[s.sid] || {}).model || s.model), ctxLabel(ctxOf(s))];
     if (s.cost_usd) bits.push(fmtCost(s.cost_usd));
     sub.textContent = bits.filter(Boolean).join(" · ");
   }
@@ -2961,10 +3101,7 @@ function termKeyBar() {
 // the cost (a terminal does not report it). The context comes from the
 // transcript while the terminal drives the session (Runner.snapshot).
 function termSub(s) {
-  const bits = ["True View", s?.project, s?.model && shortModel(s.model)];
-  if (s?.context_pct != null) bits.push(`ctx ${Math.round(s.context_pct)}%`
-    + (s.context_tokens ? ` · ${fmtTokens(s.context_tokens)}` : ""));
-  else if (s?.context_tokens) bits.push(`ctx ${fmtTokens(s.context_tokens)}`);
+  const bits = ["True View", s?.project, s?.model && shortModel(s.model), ctxLabel(ctxOf(s))];
   return bits.filter(Boolean).join(" · ");
 }
 
@@ -2996,8 +3133,8 @@ function renderTerm(sid) {
       } }, "end"),
       // a look at the chat leaves the terminal running (>_ there comes back)
       el("button", { class: "tb-btn tb-text", "aria-label": "Chat", onclick: () => openChat(sid) }, "chat"),
-      tabsBtn(),
-      el("button", { class: "tb-btn", onclick: () => infoSheet(sid) }, "ⓘ")),
+      el("button", { class: "tb-btn", onclick: () => infoSheet(sid) }, "ⓘ"),
+      tabsBtn()),
   );
 
   const mount = el("div", { id: "term" });
@@ -3616,6 +3753,7 @@ function palette(sid) {
     { name: "model", desc: "Change model", act: () => modelSheet(sid) },
     { name: "mode", desc: "Change permission mode", act: () => modeSheet(sid) },
     { name: "info", desc: "Session info, context, MCP status", act: () => infoSheet(sid) },
+    { name: "find", desc: "Find in this chat (⌘F)", act: () => chatUI.find?.open() },
     { name: "library", desc: "Skills, commands, agents, MCP", act: () => nav({ name: "skills" }) },
     { name: "clear", desc: "Start fresh context in this chat", act: () => confirmClear(sid) },
   ].filter((c) => c && (!incognito || !INCOGNITO_HIDDEN.has(c.name)));
@@ -3816,14 +3954,11 @@ function usageBits() {
 function infoSheet(sid) {
   const s = S.sessions.find((x) => x.sid === sid) || {};
   const meta = S.meta[sid] || {};
-  // with True View open the terminal drives the session: the SDK's context
-  // figure and the chat's cost and plan usage fall behind, so the context
-  // comes from the snapshot (the transcript) and the rest from /usage
+  // with True View open the terminal drives the session: the chat's cost
+  // and plan usage fall behind, so those come from /usage (the context from
+  // ctxOf, as in the header)
   const tv = !!s.terminal;
-  const live = S.context[sid];
-  const ctx = !tv ? live : s.context_tokens ? {
-    total_tokens: s.context_tokens, max_tokens: live?.max_tokens, percentage: s.context_pct,
-  } : null;
+  const ctx = ctxOf(s.sid ? s : { sid });
   const body = el("div", { class: "sheet-body" });
 
   body.append(el("div", { class: "sheet-title" }, s.title || "session"));
@@ -3837,15 +3972,15 @@ function infoSheet(sid) {
     kvRow("process", s.terminal ? "true view" : s.live ? "running" : "stopped"),
   );
 
-  if (ctx) {
-    const pct = Math.round(ctx.percentage || 0);
-    const known = ctx.percentage != null && ctx.max_tokens;
+  if (ctx.tokens) {
+    const pct = Math.round(ctx.pct || 0);
+    // a stopped session has a percentage but no window size (no SDK event)
+    const figure = [ctx.max ? `${fmtTokens(ctx.tokens)} / ${fmtTokens(ctx.max)}` : fmtTokens(ctx.tokens),
+      ctx.pct != null ? `${pct}%` : ""].filter(Boolean).join(" · ");
     body.append(el("div", { style: "padding:10px 0 4px" },
       el("div", { style: "display:flex; justify-content:space-between; font-size:12px; font-family:var(--mono); color:var(--dim)" },
         el("span", null, "context"),
-        el("span", null, known
-          ? `${fmtTokens(ctx.total_tokens)} / ${fmtTokens(ctx.max_tokens)} · ${pct}%`
-          : fmtTokens(ctx.total_tokens))),
+        el("span", null, figure)),
       el("div", { class: "ctx-bar" },
         el("div", { class: "fill" + (pct > 80 ? " high" : pct > 55 ? " mid" : ""), style: `width:${pct}%` }))));
   }
@@ -4224,6 +4359,7 @@ function keysSheet() {
     ["answer a question · plan choice", "1–9"],
     ["file: scroll · page · prev/next · download · close", "↑ ↓ · space · ← → · d · ⏎"],
     ["file: find in the text · next / previous match", "/ or ⌘F · ⏎ / ⇧⏎"],
+    ["chat: find in the messages (or /find)", "⌘F · ⏎ / ⇧⏎"],
   ];
   rawSheet(el("div", { class: "sheet-body" },
     el("div", { class: "sheet-title" }, "Keyboard shortcuts"),
@@ -4243,10 +4379,13 @@ document.addEventListener("keydown", (e) => {
     else if (isTyping(t)) t.blur();
     return;
   }
-  // ⌘F / Ctrl+F in the file viewer opens its own search, not the browser's
-  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "f"
-      && S.sheetFind && $("#sheet-root").children.length) {
-    e.preventDefault(); S.sheetFind(); return;
+  // ⌘F / Ctrl+F in the file viewer and in the chat opens the app's own
+  // search, not the browser's
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "f") {
+    if (S.sheetFind && $("#sheet-root").children.length) { e.preventDefault(); S.sheetFind(); return; }
+    if (S.view?.name === "chat" && !overlayOpen() && chatUI.find?.bar.isConnected) {
+      e.preventDefault(); chatUI.find.open(); return;
+    }
   }
   if (e.defaultPrevented || e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
   if (isTyping(t)) {
@@ -4440,7 +4579,7 @@ async function finishBoot() {
 
 function renderUnreachable() {
   setTopbar();
-  $("#view").replaceChildren(
+  gateView(
     el("div", { class: "login-box" },
       el("div", { class: "glyph" }, "❯_"),
       el("h1", null, "Clicker4AI"),

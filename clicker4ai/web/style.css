@@ -173,12 +173,17 @@ a { color: var(--accent); }
 .dot.error { background: var(--err); }
 .dot.detached { background: var(--faint); }
 @keyframes pulse { 50% { opacity: 0.35; } }
-/* an open tab waits for an approval and its card is on screen (app.js
+/* an open tab waits for an approval and a row of it is on screen — session
+   card, Tabs card or a project's past session (app.js SESSION_ROWS,
    updateTabsAlert); the Tabs button stays calm meanwhile */
-.s-card.alert { border-color: var(--warn); animation: border-pulse 1.2s ease-in-out infinite; }
+/* .on.alert: wins over the last tab's own frame (.tab-card.on, below) */
+.s-card.alert, .tab-card.alert, .tab-card.on.alert, .item.alert {
+  border-color: var(--warn); box-shadow: none;
+  animation: border-pulse 1.2s ease-in-out infinite;
+}
 @keyframes border-pulse { 50% { border-color: var(--border); } }
 @media (prefers-reduced-motion: reduce) {
-  .dot, .caret, .tabs-count, .s-card.alert { animation: none !important; }
+  .dot, .caret, .tabs-count, .s-card.alert, .tab-card.alert, .item.alert { animation: none !important; }
 }
 
 /* the signature: live status ticker */
@@ -213,6 +218,8 @@ a { color: var(--accent); }
 .s-card .meta-row .error { color: var(--err); font-weight: 700; }
 .s-card .meta-row .running, .tab-card .tc-meta .running { color: var(--ok); font-weight: 700; }
 .s-card .meta-row .stopped, .tab-card .tc-meta .stopped { color: var(--faint); }
+/* last activity inside the prompt-cache TTL (ageSpan in app.js) */
+.age.warm { color: var(--ok); }
 
 .fab {
   position: fixed; right: 18px; bottom: calc(var(--sab) + 20px);
@@ -324,6 +331,12 @@ a { color: var(--accent); }
 .drawer-foot .conn-bad { color: var(--warn); }
 .drawer-foot .foot-btn { color: var(--dim); font-family: var(--mono); font-size: 11.5px; padding: 4px 6px; }
 .drawer-foot .foot-btn:active { color: var(--text); }
+/* copyright, licence and source link: menu bottom and login screen */
+.legal-line {
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.5; color: var(--faint);
+  padding: 10px 10px 0; text-align: center;
+}
+.legal-line a { color: var(--dim); text-decoration: underline; }
 
 /* ---------- home ---------- */
 .home-h {
@@ -735,8 +748,10 @@ a { color: var(--accent); }
 .file-find { position: sticky; top: 0; z-index: 1; background: var(--surface); display: flex; gap: 6px; align-items: center; padding-bottom: 8px; }
 .sheet .file-find input[type="text"] { flex: 1; min-width: 0; margin-bottom: 0; }
 .file-find .ff-count { font-family: var(--mono); font-size: 11px; color: var(--dim); flex: none; }
-.file-text mark { background: color-mix(in srgb, var(--accent) 30%, transparent); color: inherit; border-radius: 2px; }
-.file-text mark.cur { background: var(--accent); color: var(--bg); }
+/* find in a file and in the chat (app.js findBar) */
+mark.find-mark { background: color-mix(in srgb, var(--accent) 30%, transparent); color: inherit; border-radius: 2px; }
+mark.find-mark.cur { background: var(--accent); color: var(--bg); }
+.chat-find { padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .file-img { display: block; max-width: 100%; height: auto; margin: 0 auto; background: repeating-conic-gradient(#8883 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
 .file-img-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .file-img-wrap.full .file-img { max-width: none; }
@@ -778,11 +793,13 @@ a.btn { display: inline-block; color: inherit; text-decoration: none; text-align
 /* the default choice: accent, and ⏎ takes it with a keyboard */
 .sheet-item.primary { color: var(--accent); font-weight: 600; }
 .sheet-item .si-check { color: var(--accent); flex: none; }
-.sheet input[type="search"], .sheet input[type="text"] {
+.sheet input[type="search"], .sheet input[type="text"], .chat-find input[type="text"] {
   width: 100%; background: var(--surface2); border: 1px solid var(--border);
   border-radius: 10px; padding: 9px 12px; font-size: 15px; margin-bottom: 10px;
   color: var(--text); outline: none; -webkit-appearance: none;
 }
+/* after the rule above, which gives inputs a bottom margin */
+.chat-find input[type="text"] { flex: 1; min-width: 0; margin-bottom: 0; }
 
 /* ---------- scope badge ---------- */
 .badge {
@@ -814,6 +831,11 @@ a.btn { display: inline-block; color: inherit; text-decoration: none; text-align
 .login-box input:focus { border-color: var(--accent); }
 .login-box .btn { width: 100%; padding: 12px; }
 .login-err { color: var(--err); font-size: 13px; margin-top: 10px; font-family: var(--mono); }
+/* login, lock and gate screens: the legal line sits at the bottom of the
+   screen, or below the box when that is taller */
+.gate-screen { min-height: 100%; display: flex; flex-direction: column; }
+.gate-screen > .login-box { width: 100%; }
+.gate-screen > .legal-line { margin-top: auto; padding: 28px 16px calc(var(--sab) + 14px); }
 .login-box p.quiet { color: var(--faint); font-size: 12.5px; margin: 22px 0 0; text-align: left; }
 .login-box p.quiet code { font-family: var(--mono); font-size: 12px; word-break: break-all; }
 /* "or — sign in with passkey", shown only where WebAuthn can work */

@@ -9,6 +9,11 @@ Clicker4AI is licensed under [AGPL-3.0-only](LICENSE). By submitting a
 contribution you agree that it is licensed under the same terms (inbound =
 outbound). There is no CLA.
 
+As section 14 of the license allows, the maintainer (Kosio) is the proxy who
+can accept a future version of the AGPL for the whole project, your
+contribution included; see [NOTICE](NOTICE). Your code stays yours, and
+AGPL-3.0 keeps applying to it either way.
+
 Optionally, sign off your commits (`git commit -s`) to certify the
 [Developer Certificate of Origin](https://developercertificate.org/).
 

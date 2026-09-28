@@ -1,6 +1,6 @@
 [project]
 name = "clicker4ai"
-version = "1.0.0rc2"
+version = "1.0.0rc3"
 description = "Self-hosted web app to drive Claude Code sessions on your Linux server from a phone, tablet or laptop"
 readme = "README.md"
 license = "AGPL-3.0-only"

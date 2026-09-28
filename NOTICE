@@ -2,6 +2,11 @@ Clicker4AI
 Copyright (c) 2026 Kosio (https://github.com/kosio-labs/clicker4ai).
 Licensed under AGPL-3.0-only (see LICENSE).
 
+Proxy (section 14 of the license): Kosio, the maintainer, is the proxy who
+can decide whether future versions of the GNU Affero General Public License
+can be used for this program. Such a decision takes effect through a public
+statement of acceptance in the project repository.
+
 This project is based on better-claude-rc 0.1.0 (PyPI sdist) by Rafa Rayes,
 released under the MIT License, reproduced below.
 

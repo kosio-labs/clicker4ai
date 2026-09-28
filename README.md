@@ -63,7 +63,7 @@ install` in its place). If pipx's default Python is older, add `--python
 python3.13`.
 
 ```bash
-pipx install clicker4ai==1.0.0rc2     # a release candidate needs its version
+pipx install clicker4ai==1.0.0rc3     # a release candidate needs its version
 c4ai config roots add ~/work          # the folders devices may be given
 c4ai serve                            # start the server
 ```
@@ -194,8 +194,9 @@ suits a different setup:
   50 MB, never overwriting) is a separate per-device grant; both are off by
   default.
 - **Physical keyboard** — ↑/↓ (or j/k) and ⏎ through lists, menus and
-  sheets, `/` to search, `g h/s/p/t` to jump, `1`–`4` / `y` / `n` on
-  approval cards and digits on questions and plans; `?` lists everything.
+  sheets, `/` to search, ⌘F to find in a chat, `g h/s/p/t` to jump,
+  `1`–`4` / `y` / `n` on approval cards and digits on questions and plans;
+  `?` lists everything.
   With a mouse or trackpad (also an iPad's trackpad keyboard) ⏎ sends the
   message and ⇧⏎ starts a new line, and key hints show; on a phone ⏎ is a
   new line and the ↑ button sends.
@@ -798,6 +799,22 @@ status feedback).
 
 ## Changes
 
+### 1.0.0rc3 (2026-09-28)
+
+- Licence notices in the app, as AGPL-3.0 requires, and the link to the
+  source code.
+- A stopped session shows its context size in the chat header and the info
+  sheet, read from its transcript.
+- A session's last-activity time is green while its prompt cache is likely
+  still warm (under an hour), in the session list, on Home, in Tabs and in a
+  project's past sessions.
+- The menu lists Sessions and Projects right after Home; the Tabs button is
+  last in the chat and True View top bar, as on the other screens.
+- A tab waiting for an approval now pulses in Tabs and among its project's
+  sessions too, not only in the session list.
+- Find in the chat: ⌘F (or `/find`) searches your messages and Claude's
+  replies, newest match first.
+
 ### 1.0.0rc2 (2026-09-27)
 
 - The "/" command list scrolls on a phone again (so do the folder browser and
@@ -818,7 +835,8 @@ First public release.
 ## License
 
 [AGPL-3.0-only](https://github.com/kosio-labs/clicker4ai/blob/main/LICENSE)
-© 2026 [Kosio](https://github.com/kosio-labs).
+© 2026 [Kosio](https://github.com/kosio-labs). Kosio is also the proxy (license
+section 14) who can accept a future version of the AGPL for the project.
 
 Based on `better-claude-rc` 0.1.0 © 2026 Rafa Rayes, released under the MIT
 License, and reworked into a local-only server; its notice is kept in
