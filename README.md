@@ -328,6 +328,19 @@ from another account with `su -`.
    is refused, an admin can run `sudo loginctl enable-linger <user>`).
 5. Logs: `journalctl --user -u clicker4ai -f`
 
+### Upgrading Clicker4AI
+
+Stop the server, upgrade, start it again:
+
+```bash
+systemctl --user stop clicker4ai     # or however you run it
+pipx upgrade clicker4ai
+systemctl --user start clicker4ai
+```
+
+Settings, devices and passkeys in `~/.clicker4ai` stay; open apps show "new
+version" and reload with a tap.
+
 ### Updates and telemetry
 
 Claude Code processes started by the server get
@@ -460,6 +473,8 @@ c4ai devices set <id> --files                   # browse, view, download project
 c4ai devices set <id> --files-upload            # …and upload (implies --files)
 c4ai devices rename <id> "Work Phone"           # names are unique
 c4ai devices lock <id>                          # sleep, keep grants
+c4ai devices                                    # list devices and their grants
+c4ai revoke <id>                                # sign out and delete it
 ```
 
 `devices set` takes the flags of `pair` plus their `--no-` opposites and
