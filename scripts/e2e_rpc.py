@@ -211,6 +211,16 @@ async def main():
         assert not r["ok"] and r["error"]["code"] == "forbidden", r
         print("projects.rename ok — unknown session not_found, cwd jail")
 
+        # ---- projects.search: the RPC shape and its refusals (matching
+        # itself is scripts/search_test.py)
+        r = await rpc(ws, "projects.search", {"q": "zzqx-no-such-word"})
+        assert r["ok"] and r["result"] == {"sessions": [], "next": None}, r
+        r = await rpc(ws, "projects.search", {"q": "a?c"})
+        assert not r["ok"] and r["error"]["code"] == "bad_request", r
+        r = await rpc(ws, "projects.search", {"q": "x", "offset": -1})
+        assert not r["ok"] and r["error"]["code"] == "bad_request", r
+        print("projects.search ok — no match, bad query and offset refused")
+
         # ---- sessions.incognito: a bad model is refused before anything is
         # created under ~/incognito (the chat itself: scripts/incognito_test.py)
         r = await rpc(ws, "sessions.incognito", {"model": "bad model!"})
@@ -241,7 +251,7 @@ async def main():
 
         # ---- remote permission-mode block
         r = await rpc(ws, "state")
-        assert r["result"]["defaults"]["modes"] == ["default", "acceptEdits", "plan"], r
+        assert r["result"]["defaults"]["modes"] == ["default", "acceptEdits", "plan", "auto"], r
         for mode in ("bypassPermissions", "dontAsk"):
             r = await rpc(ws, "sessions.create", {"cwd": CWD, "mode": mode})
             assert not r["ok"] and r["error"]["code"] == "bad_request", f"{mode}: {r}"
@@ -391,6 +401,8 @@ async def main():
         r = await rpc(ws, "sdk.status")
         assert r["ok"] and "installed" in r["result"], r
         r = await rpc(ws, "sdk.install", {"version": "0.0.0"})
+        assert not r["ok"] and r["error"]["code"] in ("forbidden", "stepup_required"), r
+        r = await rpc(ws, "sdk.install", {"version": "0.0.0", "cli": "0.0.0"})
         assert not r["ok"] and r["error"]["code"] in ("forbidden", "stepup_required"), r
         r = await rpc(ws, "sdk.cli_update", {"version": "0.0.0"})
         assert not r["ok"] and r["error"]["code"] in ("forbidden", "stepup_required"), r

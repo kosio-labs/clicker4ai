@@ -341,19 +341,25 @@ class SdkWatch:
             "busy": busy,
         }
 
-    async def install(self, version: str) -> None:
-        """Background task: the rpc returns at once, the app polls status."""
+    async def install(self, version: str, and_cli: bool = False) -> None:
+        """Background task: the rpc returns at once, the app polls status.
+        `and_cli`: then `claude update` too ("Update both"), only when the
+        SDK went in, so a failed pip leaves the CLI as it was."""
         if self._lock.locked():
             return
         async with self._lock:
             self.installing = version
             self.last_install = None
+            if and_cli:
+                self.last_cli_update = None
             try:
                 self.last_install = await asyncio.to_thread(install, version)
             except Exception as e:
                 self.last_install = {"ok": False, "message": str(e)}
             finally:
                 self.installing = ""
+            if and_cli and self.last_install.get("ok"):
+                await self._update_cli()
 
     async def update_cli(self) -> None:
         """Background task like install(); shares its lock, so pip and
@@ -361,15 +367,18 @@ class SdkWatch:
         if self._lock.locked():
             return
         async with self._lock:
-            self.cli_updating = True
-            self.last_cli_update = None
-            try:
-                self.last_cli_update = await asyncio.to_thread(update_cli)
-            except Exception as e:
-                self.last_cli_update = {"ok": False, "message": str(e)}
-            finally:
-                self._cli = ("", 0.0)
-                self.cli_updating = False
+            await self._update_cli()
+
+    async def _update_cli(self) -> None:
+        self.cli_updating = True
+        self.last_cli_update = None
+        try:
+            self.last_cli_update = await asyncio.to_thread(update_cli)
+        except Exception as e:
+            self.last_cli_update = {"ok": False, "message": str(e)}
+        finally:
+            self._cli = ("", 0.0)
+            self.cli_updating = False
 
 
 def restart_now() -> None:

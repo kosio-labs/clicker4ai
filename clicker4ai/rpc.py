@@ -17,7 +17,7 @@ from pathlib import Path
 
 from claude_agent_sdk import rename_session
 
-from . import VERSION, files, library, passkey, projects, sdk_update, trust
+from . import VERSION, files, library, passkey, projects, sdk_update, search, trust
 from .auth import NAME_MAX, DeviceStore
 from .config import INCOGNITO_DIR, Config
 from .scope import Scope, incognito_home
@@ -331,10 +331,23 @@ async def _projects_recent(m: SessionManager, config: Config, params: dict,
     return {"projects": [p for p in items if ctx.scope.contains(p["path"])]}
 
 
+PINNED_MAX = 50   # pinned past sessions looked up per project list
+PAST_PAGE = 25    # past sessions per page ("Show more" loads the next)
+
+
 async def _projects_sessions(m: SessionManager, config: Config, params: dict,
                              ctx: RpcContext) -> dict:
     cwd = str(_jailed_path(_require_str(params, "cwd"), ctx.scope))
-    past = await asyncio.to_thread(projects.past_sessions, cwd)
+    # ids the app has pinned in this project (optional); a bounded list of
+    # well-formed ids, anything else is ignored rather than refused
+    pinned = params.get("pinned")
+    pinned = [p for p in pinned if isinstance(p, str) and valid_session_id(p)][:PINNED_MAX] \
+        if isinstance(pinned, list) else []
+    offset = params.get("offset", 0)
+    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+        raise RpcError("bad_request", "invalid offset")
+    past, more = await asyncio.to_thread(projects.past_sessions, cwd, PAST_PAGE,
+                                         offset=offset, pinned=pinned)
     # worktree sessions carry their own cwd; keep only those in scope
     past = [s for s in past if ctx.scope.contains(s["cwd"] or cwd)]
     # a transcript some runner already holds opens as that runner, as
@@ -342,7 +355,8 @@ async def _projects_sessions(m: SessionManager, config: Config, params: dict,
     for s in past:
         held = _holding_runner(m, s["session_id"], ctx.scope)
         s["runner_sid"] = held.sid if held else None
-    return {"sessions": past}
+    # the offset of the next page, counted before the scope filter above
+    return {"sessions": past, "next": offset + PAST_PAGE if more else None}
 
 
 async def _projects_preview(m: SessionManager, config: Config, params: dict,
@@ -376,6 +390,30 @@ async def _projects_rename(m: SessionManager, config: Config, params: dict,
         except (OSError, ValueError) as e:
             raise RpcError("not_found", f"could not rename: {e}")
     return {"ok": True, "title": title}
+
+
+SEARCH_PAGE = 50   # search results per page ("Show more" loads the next)
+# one search at a time: each reads every transcript, and a second one
+# running alongside would only slow both
+_search_lock = asyncio.Lock()
+
+
+async def _projects_search(m: SessionManager, config: Config, params: dict,
+                           ctx: RpcContext) -> dict:
+    query = _require_str(params, "q")
+    offset = params.get("offset", 0)
+    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+        raise RpcError("bad_request", "invalid offset")
+    async with _search_lock:
+        try:
+            found, more = await asyncio.to_thread(
+                search.search, query, ctx.scope.contains, SEARCH_PAGE, offset)
+        except search.QueryError as e:
+            raise RpcError("bad_request", str(e))
+    for s in found:   # a session some runner holds opens as that runner
+        held = _holding_runner(m, s["session_id"], ctx.scope)
+        s["runner_sid"] = held.sid if held else None
+    return {"sessions": found, "next": offset + SEARCH_PAGE if more else None}
 
 
 async def _browse(m: SessionManager, config: Config, params: dict,
@@ -518,18 +556,23 @@ async def _sdk_install(m: SessionManager, config: Config, params: dict,
                        ctx: RpcContext) -> dict:
     """Start installing the version the last check offered; the app polls
     sdk.status. Only that exact version: the app never names an arbitrary
-    one."""
+    one. `cli` (optional, "Update both"): the CLI version on offer, updated
+    right after the SDK installs."""
     _require_manager(ctx)
     ctx.require_confirmation("update the Agent SDK")
     w = sdk_update.WATCH
     version = _require_str(params, "version")
     if not w.update_available() or version != w.latest:
         raise RpcError("bad_request", "that is not the update on offer")
+    cli = params.get("cli")
+    if cli is not None and (cli != w.cli_latest
+                            or not await asyncio.to_thread(w.cli_update_available)):
+        raise RpcError("bad_request", "that is not the CLI update on offer")
     if not sdk_update.can_install():
         raise RpcError("forbidden", "no pip here; run: " + sdk_update.hint_command(version))
     if w.installing or w.cli_updating:
         raise RpcError("bad_request", "another update is running")
-    asyncio.create_task(w.install(version))
+    asyncio.create_task(w.install(version, and_cli=cli is not None))
     return {"ok": True, "installing": version}
 
 
@@ -589,6 +632,7 @@ METHODS = {
     "projects.sessions": _projects_sessions,
     "projects.preview": _projects_preview,
     "projects.rename": _projects_rename,
+    "projects.search": _projects_search,
     "browse": _browse,
     "mkdir": _mkdir,
     "trust.add": _trust_add,

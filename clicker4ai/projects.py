@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from claude_agent_sdk import get_session_messages, list_sessions
+from claude_agent_sdk import get_session_info, get_session_messages, list_sessions
 
 from .config import INCOGNITO_DIR, PROTECTED_DIRS
 from .library import _read_claude_json
@@ -116,13 +116,32 @@ def recent_projects(limit: int = 40) -> list[dict]:
     return items[:limit]
 
 
-def past_sessions(cwd: str, limit: int = 25) -> list[dict]:
-    """Resumable transcript sessions for a project directory."""
+def past_sessions(cwd: str, limit: int = 25, offset: int = 0,
+                  pinned: list[str] = ()) -> tuple[list[dict], bool]:
+    """Resumable transcript sessions for a project directory, newest first:
+    `limit` of them from `offset` ("Show more" pages through), plus the
+    `pinned` ids the app asks for that fall outside them (a pin must not
+    vanish just because newer sessions pushed it out). Also returns whether
+    more sessions follow. The SDK reads the head and tail of every
+    transcript either way; the limit spares only the stats reads below."""
     out = []
     try:
-        infos = list_sessions(directory=cwd, limit=limit)
+        infos = list_sessions(directory=cwd, limit=limit + 1, offset=offset)
     except Exception:
-        return out
+        return out, False
+    more = len(infos) > limit
+    infos = infos[:limit]
+    seen = {info.session_id for info in infos}
+    for sid in pinned:
+        if sid in seen:
+            continue
+        try:
+            info = get_session_info(sid, directory=cwd)
+        except Exception:
+            info = None
+        if info is not None:   # gone (deleted) or not in this project: skipped
+            infos.append(info)
+            seen.add(sid)
     for info in infos:
         where, path = _session_dir(info.session_id, cwd, info.cwd)
         stats = transcript_stats(path)
@@ -143,7 +162,7 @@ def past_sessions(cwd: str, limit: int = 25) -> list[dict]:
             "model": stats["model"],
         })
     out.sort(key=lambda x: x["last_modified_ms"] or 0, reverse=True)
-    return out
+    return out, more
 
 
 def session_preview(session_id: str, cwd: str | None, tail: int = 12) -> list[dict]:

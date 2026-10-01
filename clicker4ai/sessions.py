@@ -57,11 +57,16 @@ from .history import chain_prompts, history_events
 from .transcript import last_activity_ms, short_path, transcript_stats
 from .watch import rows_to_events, transcript_path
 
-PERMISSION_MODES = ["default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"]
-# Modes a remote device may pick. bypassPermissions / dontAsk run tools
-# without asking, so a stolen phone would be a remote shell; they stay
-# available only in a local terminal on the server.
-REMOTE_MODES = ["default", "acceptEdits", "plan"]
+PERMISSION_MODES = ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"]
+# Modes a remote device may pick. auto: a Claude Code classifier approves
+# instead of the user and falls back to asking after repeated blocks; it
+# adds no power over the device holder, who can tap Allow anyway (not on
+# Haiku: the CLI then starts in default, see _handle). bypassPermissions
+# runs everything unchecked, protected paths included; it stays available
+# only in a local terminal on the server. dontAsk is the opposite, not a
+# risk: it denies whatever would ask, leaving a session that can do almost
+# nothing from the app, so it is not offered either.
+REMOTE_MODES = ["default", "acceptEdits", "plan", "auto"]
 MODEL_CHOICES = ["default", "opus", "sonnet", "haiku"]
 # Model ids end up in `claude --model <id>` (True View), so only plain ids /
 # aliases: "opus", "claude-opus-5", "claude-opus-5[1m]", "us.anthropic.x:0".
@@ -196,6 +201,17 @@ class _PermissionUpdate(PermissionUpdate):
 
 def now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _sigterm(e: Exception) -> bool:
+    """The `claude` process was ended by SIGTERM: exit code 143 when it
+    exits on the signal itself, -15 when the signal killed it. The SDK's
+    ProcessError carries the code; a wrapped one only has it in the text."""
+    code = getattr(e, "exit_code", None)
+    if code is None:
+        m = re.search(r"exit code:? (-?\d+)", str(e))
+        code = int(m.group(1)) if m else None
+    return code in (143, -15)
 
 
 def _msg_snippet(ev: dict) -> dict | None:
@@ -702,7 +718,14 @@ class SessionRunner:
         except asyncio.CancelledError:
             return
         except Exception as e:
-            if not self._closing and self.client is client:
+            if not self._closing and self.client is client and _sigterm(e):
+                # systemd/pm2 stopping the service (or a reboot) signals the
+                # whole group, so `claude` can go before our own shutdown
+                # reaches it: nothing failed, the session resumes as usual
+                log.info("%s process stopped by SIGTERM", self.sid)
+                self.notice("Session process stopped (SIGTERM) — "
+                            "it resumes on the next message")
+            elif not self._closing and self.client is client:
                 tail = self._stderr_tail()
                 log.warning("%s process ended: %s\n%s", self.sid, e, tail)
                 self.notice(f"Session process ended: {e}"
@@ -769,6 +792,14 @@ class SessionRunner:
                 if self.rewind_at is not None and self.rewind_at.get("at") is None:
                     self.rewind_at = None   # the fresh session exists now
             self.meta.update({k: v for k, v in ev.items() if k != "kind"})
+            # auto asked for but refused (Haiku, an org setting, the
+            # account): the CLI runs in another mode; show that one, not auto
+            got = ev.get("permission_mode")
+            if self.mode == "auto" and got and got != "auto" and got in REMOTE_MODES:
+                self.mode = got
+                self.notice(f"Auto mode is not available for this session (model or account) — "
+                            f"running in {got}, approvals come as usual.", "error")
+                self.manager.schedule_sessions_update()
             self.save_meta()
         elif kind == "delta" or kind == "text_open":
             self.set_status("working", "Writing…")

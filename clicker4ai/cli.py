@@ -280,7 +280,7 @@ def _devices(args: argparse.Namespace) -> None:
         return
     print(f"{'ID':10s} {'NAME':24s} {'PAIRED':17s} {'LAST SEEN':17s} "
           f"{'MANAGE':7s} {'TERM':5s} {'KEY':4s} {'REQ':4s} {'QUIET':6s} "
-          f"{'FILES':6s} "
+          f"{'FILES':7s} "
           f"{'STATE':7s} ROOTS")
     for d in devs:
         own = d.get("roots")
@@ -292,7 +292,7 @@ def _devices(args: argparse.Namespace) -> None:
               f"{'yes' if d.get('passkey') else 'no':4s} "
               f"{'yes' if d.get('require_passkey') else 'no':4s} "
               f"{'exempt' if d.get('quiet_exempt') else 'yes':6s} "
-              f"{_files_label(d):6s} "
+              f"{_files_label(d):7s} "
               f"{'locked' if d.get('locked') else 'active':7s} {roots}")
 
 
@@ -1037,7 +1037,15 @@ def main(argv: list[str] | None = None) -> None:
         args.device_id = DeviceStore().resolve(ref)
         if args.device_id is None:
             sys.exit(f"No such device: {ref}")
-    args.func(args)
+    from .config import CONFIG_PATH, ConfigError
+    try:
+        args.func(args)
+    except ConfigError as e:
+        # a setup mistake, not a bug: the message alone, with the full path
+        msg = str(e)
+        if msg.startswith("config.json:"):
+            msg = f"{CONFIG_PATH}:{msg.removeprefix('config.json:')}"
+        sys.exit(msg)
 
 
 if __name__ == "__main__":

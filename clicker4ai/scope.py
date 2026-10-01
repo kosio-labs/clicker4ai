@@ -11,7 +11,7 @@ none remain the device sees nothing — it never widens to the ceiling.
 
 A scope limits what the remote UI can see and control. It is not a
 sandbox: a Claude session may still touch files outside its cwd, which is
-why bypassPermissions/dontAsk are not available remotely (sessions.py).
+why bypassPermissions is not available remotely (sessions.py).
 
 A device that has at least one folder also owns a private directory,
 INCOGNITO_DIR/<device id>, for its incognito chat. It counts for access

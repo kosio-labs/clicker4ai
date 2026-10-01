@@ -1,6 +1,6 @@
 // Back-navigation smoke test (Playwright, global install via NODE_PATH, so CommonJS).
 // Needs the test server on 127.0.0.1:8781 with its own C4AI_DATA_DIR and a
-// pairing code from `pair --no-qr --root ~/work --no-passkey` (same data dir):
+// pairing code from `pair --no-qr --root ~/work --no-passkey --files` (same data dir):
 //   NODE_PATH=$HOME/.npm-global/lib/node_modules node scripts/nav_test.js <code>
 // ‹ undoes the last step: checks ‹, the edge swipe (history.back), Tabs, lists,
 // a deleted previous session, reload and a fresh start. Sessions are fakes
@@ -49,6 +49,32 @@ const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) fails++
   await expect(PH + " d=1", "swipe from A → project");
   await run(() => history.back());
   await expect("#/chat/fakeA d=1", "swipe again → A");
+
+  // 1b. /files from a chat sits on top of it: back closes it without the
+  // swap, so the chat's way back (the project) stays; forward is a no-op
+  const FH = `#/files?${encodeURIComponent(P)}`;
+  await run(() => openFiles("fakeA"));
+  await expect(FH + " d=2", "/files from A on top of it");
+  await run(() => goBack());
+  await expect("#/chat/fakeA d=1", "‹ from /files → A");
+  await run(() => history.forward());
+  await expect("#/chat/fakeA d=1", "forward onto the closed /files → stays on A");
+  await run(() => openFiles("fakeA"));
+  await p.keyboard.press("Escape");
+  await expect("#/chat/fakeA d=1", "Esc on /files → A");
+  await run(() => goBack());
+  await expect(PH + " d=1", "‹ from A → project, not /files");
+  await run(() => goBack());
+  await expect("#/chat/fakeA d=1", "‹ again → A");
+  await run(() => openFiles("fakeA"));
+  await run(() => nav({ name: "tabs" }));
+  await expect("#/tabs d=1", "/files → Tabs keeps /files under");
+  await run(() => goBack());
+  await expect(FH + " d=1", "‹ from Tabs → /files (an ordinary screen now)");
+  // back to project → A for what follows
+  await run((P) => nav({ name: "project", path: P }), P);
+  await run(() => openChat("fakeA"));
+  await expect("#/chat/fakeA d=1", "project → A again");
 
   // 2. chat ↔ True View is one screen
   await run(() => nav({ name: "term", sid: "fakeA" }));

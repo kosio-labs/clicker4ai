@@ -91,6 +91,21 @@ function fmtTokens(n) {
   return n >= 1000 ? Math.round(n / 1000) + "k" : String(n);
 }
 
+function copyText(text) {
+  return navigator.clipboard?.writeText(text)
+    .then(() => toast("Copied"), () => toast("Copy failed", true))
+    ?? toast("Copy needs https", true);
+}
+
+// ⧉ on a code block copies the block. One listener for every block md()
+// makes (chat, plan, /btw); capture, so the tap does nothing else.
+document.addEventListener("click", (e) => {
+  const b = e.target.closest?.(".code-copy");
+  if (!b) return;
+  e.stopPropagation();
+  copyText(b.parentElement.querySelector("code").textContent);
+}, true);
+
 // Minimal markdown renderer (escape-first, safe).
 function md(src) {
   if (!src) return "";
@@ -98,7 +113,8 @@ function md(src) {
   src = String(src).replace(/( *)```([^\n`]*)\n([\s\S]*?)[ \t]*```/g, (_, ind, lang, body) => {
     // a fence indented under a list item: its lines carry that indent too
     if (ind) body = body.replace(new RegExp(`^ {1,${ind.length}}`, "gm"), "");
-    codeBlocks.push(`<pre><code>${esc(body.replace(/\n$/, ""))}</code></pre>`);
+    codeBlocks.push(`<div class="code-wrap"><pre><code>${esc(body.replace(/\n$/, ""))}</code></pre>`
+      + `<button type="button" class="code-copy" aria-label="Copy"></button></div>`);
     return `${ind}\u0000B${codeBlocks.length - 1}\u0000`;
   });
 
@@ -222,7 +238,7 @@ const S = {
   subs: new Set(),
   wsUp: false,
   serverError: false,   // last ws close was 4503 (devices.json unreadable)
-  defaults: { models: ["default", "opus", "sonnet", "haiku"], modes: ["default", "acceptEdits", "plan"] },
+  defaults: { models: ["default", "opus", "sonnet", "haiku"], modes: ["default", "acceptEdits", "plan", "auto"] },
   home: "",
   library: null,
   libraryAt: 0,
@@ -266,19 +282,93 @@ function loadTabs() {
   try { S.tabs = JSON.parse(localStorage.getItem("c4ai_tabs") || "[]"); } catch { S.tabs = []; }
   if (!Array.isArray(S.tabs)) S.tabs = [];
   S.lastTab = localStorage.getItem("c4ai_tab_active") || null;
+  // pinned tabs: shown first, skipped by "close all" (this device only)
+  try { S.tabPins = JSON.parse(localStorage.getItem("c4ai_tab_pins") || "[]"); } catch { S.tabPins = []; }
+  if (!Array.isArray(S.tabPins)) S.tabPins = [];
 }
 
 function saveTabs() {
   localStorage.setItem("c4ai_tabs", JSON.stringify(S.tabs));
   if (S.lastTab) localStorage.setItem("c4ai_tab_active", S.lastTab);
   else localStorage.removeItem("c4ai_tab_active");
+  if (S.tabPins.length) localStorage.setItem("c4ai_tab_pins", JSON.stringify(S.tabPins));
+  else localStorage.removeItem("c4ai_tab_pins");
 }
 
-// drop tabs whose session no longer exists
+// drop tabs whose session no longer exists, and pins of tabs gone
 function pruneTabs() {
   const live = new Set(S.sessions.map((s) => s.sid));
   const next = S.tabs.filter((sid) => live.has(sid));
-  if (next.length !== S.tabs.length) { S.tabs = next; saveTabs(); }
+  const pins = S.tabPins.filter((sid) => next.includes(sid));
+  if (next.length !== S.tabs.length || pins.length !== S.tabPins.length) {
+    S.tabs = next; S.tabPins = pins; saveTabs();
+  }
+}
+
+const tabPinned = (sid) => S.tabPins.includes(sid);
+
+function toggleTabPin(sid) {
+  S.tabPins = tabPinned(sid) ? S.tabPins.filter((t) => t !== sid) : [...S.tabPins, sid];
+  saveTabs();
+}
+
+// Pinned past sessions in a project's list, { claude session_id: project
+// path }. Not pruned: the list holds only the newest sessions, so one
+// missing from it may still exist.
+const PAST_PINS_KEY = "c4ai_past_pins";
+
+function loadPastPins() {
+  try {
+    const p = JSON.parse(localStorage.getItem(PAST_PINS_KEY) || "{}");
+    return p && typeof p === "object" && !Array.isArray(p) ? p : {};
+  } catch { return {}; }
+}
+
+function savePastPins(p) {
+  if (Object.keys(p).length) localStorage.setItem(PAST_PINS_KEY, JSON.stringify(p));
+  else localStorage.removeItem(PAST_PINS_KEY);
+}
+
+// Pinned projects: a list of paths, first on Home and in Projects
+const PROJECT_PINS_KEY = "c4ai_project_pins";
+
+function loadProjectPins() {
+  try {
+    const p = JSON.parse(localStorage.getItem(PROJECT_PINS_KEY) || "[]");
+    return Array.isArray(p) ? p.filter((x) => typeof x === "string") : [];
+  } catch { return []; }
+}
+
+function toggleProjectPin(path) {
+  const p = loadProjectPins();
+  const next = p.includes(path) ? p.filter((x) => x !== path) : [...p, path];
+  if (next.length) localStorage.setItem(PROJECT_PINS_KEY, JSON.stringify(next));
+  else localStorage.removeItem(PROJECT_PINS_KEY);
+}
+
+// The server lists the recent projects only: a pinned one outside them is
+// added by its path (no activity figures); pinned ones come first, each
+// group in the server's order (most recent first)
+function withPinnedProjects(projects) {
+  const pins = loadProjectPins();
+  const known = new Set(projects.map((p) => p.path));
+  const extra = pins.filter((path) => !known.has(path)).map((path) => ({
+    path, name: path.split("/").pop() || path, exists: true, last_active_ms: null, session_count: 0 }));
+  return [...projects, ...extra].sort((a, b) => pins.includes(b.path) - pins.includes(a.path));
+}
+
+// the 📌 toggle at the right of a list row (a span: the row is a button).
+// It flips itself; the row keeps its place until the list is entered again,
+// so a row unpinned by mistake does not jump away before it can be found.
+function pinToggle(on, onToggle) {
+  const t = el("span", { class: "item-pin" + (on ? " on" : ""), role: "button",
+    "aria-label": on ? "Unpin" : "Pin", onclick: (e) => {
+      e.stopPropagation(); onToggle();
+      on = !on;
+      t.classList.toggle("on", on);
+      t.setAttribute("aria-label", on ? "Unpin" : "Pin");
+    } }, "📌");
+  return t;
 }
 
 // Unsent text per session, so switching tabs, a reload or iOS killing the
@@ -330,6 +420,7 @@ function pruneDrafts() {
 
 function closeTab(sid) {
   S.tabs = S.tabs.filter((t) => t !== sid);
+  S.tabPins = S.tabPins.filter((t) => t !== sid);
   if (S.lastTab === sid) S.lastTab = S.tabs[S.tabs.length - 1] || null;
   saveTabs();
   unsubscribe(sid);
@@ -601,11 +692,16 @@ function viewHash(view) {
     : view.name === "term" ? `#/term/${view.sid}`
     : view.name === "project" ? `#/project?${encodeURIComponent(view.path)}`
     : view.name === "files" ? `#/files?${encodeURIComponent(view.path || "")}`
+    : view.name === "search" ? `#/search?${encodeURIComponent(view.q || "")}`
     : `#/${view.name}`;
 }
 
-function histPush(view) { S.depth += 1; history.pushState({ d: S.depth }, "", viewHash(view)); }
-function histReplace(view) { history.replaceState({ d: S.depth }, "", viewHash(view)); }
+// view.sub: the files screen opened from a chat (/files), an entry on top
+// of the chat like the viewer's: back closes it without the swap, so the
+// chat's own way back stays
+const histState = (view) => (view.sub ? { d: S.depth, sub: 1 } : { d: S.depth });
+function histPush(view) { S.depth += 1; history.pushState(histState(view), "", viewHash(view)); }
+function histReplace(view) { history.replaceState(histState(view), "", viewHash(view)); }
 
 // go back `steps` entries, then run `then` instead of the normal popstate
 // render; the timer covers a popstate that never comes
@@ -631,7 +727,8 @@ function nav(view) {
   if (location.hash === viewHash(view)) { show(); return; }
   // the screen being left is the only one kept under the new one
   rewind(S.depth, () => {
-    if (prev && prev.name !== "login") histReplace(prev);
+    // a /files left for elsewhere is an ordinary screen under the new one
+    if (prev && prev.name !== "login") histReplace(prev.sub ? { ...prev, sub: false } : prev);
     histPush(view); show();
   });
 }
@@ -658,7 +755,12 @@ function routeFromHash() {
   }
   if (h.startsWith("#/files?")) {
     const path = decode(h.slice(8));
-    return path === null ? { name: "home" } : { name: "files", path };
+    if (path === null) return { name: "home" };
+    return history.state?.sub ? { name: "files", path, sub: true } : { name: "files", path };
+  }
+  if (h.startsWith("#/search")) {
+    const q = h.startsWith("#/search?") ? decode(h.slice(9)) : "";
+    return { name: "search", q: q || "" };
   }
   for (const name of LIST_VIEWS) if (h.startsWith("#/" + name)) return { name };
   if (h.startsWith("#/new")) return { name: "projects" };
@@ -681,6 +783,18 @@ window.addEventListener("popstate", () => {
     return;
   }
   const left = S.view;
+  if (left?.sub && !history.state?.sub) {   // back from /files: the chat, no swap
+    S.depth = history.state?.d ?? 0;
+    kbdReset(); closeSheet(); closeDrawer();
+    S.view = routeFromHash();
+    render();
+    return;
+  }
+  if (history.state?.sub && left?.name !== "files") {   // forward onto a closed /files
+    skipPopUntil = Date.now() + 1000;
+    history.back();
+    return;
+  }
   let to = routeFromHash();
   S.depth = history.state?.d ?? 0;
   kbdReset(); closeSheet(); closeDrawer();
@@ -788,6 +902,7 @@ function render() {
     case "tabs": renderTabs(); break;
     case "project": renderProject(S.view.path); break;
     case "files": renderFiles(S.view.path); break;
+    case "search": renderSearch(); break;
     case "sessions": renderSessions(); break;
     case "projects": renderProjects(); break;
     case "devices": renderDevices(); break;
@@ -823,13 +938,16 @@ function openDrawer() {
   const active = S.view?.name;
   const backdrop = el("div", { class: "drawer-backdrop",
     onclick: (e) => { if (e.target === backdrop) closeDrawer(); } });
-  const items = [{ name: "home", label: "Home", icon: "⌂" }, ...NAV_TABS,
+  const items = [{ name: "home", label: "Home", icon: "⌂" },
+    { name: "search", label: "Search", icon: "⌕" }, ...NAV_TABS,
     { name: "devices", label: "Devices", icon: "⎔" },
     // the SDK is the server's, so only a device that manages it sees this
     S.canManage ? { name: "sdk", label: "Agent SDK", icon: "⟳", dot: S.sdkAttention } : null]
     .filter(Boolean);
   backdrop.append(el("aside", { class: "drawer" },
-    el("div", { class: "drawer-head" }, "Clicker4AI"),
+    // the name does what Home does
+    el("div", { class: "drawer-head", role: "button", onclick: () => nav({ name: "home" }) },
+      "Clicker4AI"),
     el("nav", { class: "drawer-nav" },
       items.map((t) => el("button", {
         class: "nav-item" + (active === t.name ? " on" : ""),
@@ -925,11 +1043,26 @@ async function renderSdk(check) {
   const drift = st.system_cli && st.bundled_cli && st.system_cli !== st.bundled_cli;
   const li = st.last_install, lc = st.last_cli_update;
   const actions = [];
+  // on a line of its own: inside the button row "Check now" squeezed it
+  let progress = null;
   if (st.installing || st.cli_updating) {
-    actions.push(el("div", { class: "empty" },
-      st.installing ? `Installing ${st.installing}…` : `Updating the CLI to ${st.cli_latest}…`));
+    progress = el("div", { class: "empty" },
+      st.installing ? `Installing ${st.installing}…` : `Updating the CLI to ${st.cli_latest}…`);
     setTimeout(() => { if (S.view?.name === "sdk") renderSdk(); }, 2000);
   } else if (st.update_available && st.can_install) {
+    // both on offer (they usually come out together): one confirmation, the
+    // server runs pip and then `claude update`, the CLI only if pip worked
+    if (st.cli_update_available) actions.push(el("button", { class: "btn primary", onclick: () => confirmSheet(
+      `Update SDK ${st.latest} and CLI ${st.cli_latest}?`,
+      "pip installs the SDK (the current one is put back if the server would "
+      + "not start with it), then `claude update` runs; if the SDK install "
+      + "fails, the CLI is left as it is. The new SDK is used after "
+      + "a restart, the new CLI by sessions that start from now on.",
+      async () => {
+        const r = await sdkCall("sdk.install", { version: st.latest, cli: st.cli_latest },
+          "Updating the SDK and the claude CLI");
+        if (r) renderSdk();
+      }) }, "Update both"));
     actions.push(el("button", { class: "btn primary", onclick: () => confirmSheet(
       `Install SDK ${st.latest}?`,
       "pip installs it on the server and checks the server still starts; "
@@ -1000,6 +1133,7 @@ async function renderSdk(check) {
     lc ? el("div", { class: lc.ok ? "empty" : "empty sdk-err" }, lc.message) : null,
     st.restart_when_idle ? el("div", { class: "empty" },
       "The server restarts once no session is in a turn and no True View is open.") : null,
+    progress,
     el("div", { class: "a-buttons" }, ...actions,
       el("button", { class: "btn", onclick: () => renderSdk(true) }, "Check now")),
     el("div", { class: "empty" }, "Same from the server: ", el("code", null, "c4ai sdk [update|update-cli]"), ".")));
@@ -1008,7 +1142,8 @@ async function renderSdk(check) {
 // ---------------------------------------------------------------- shared components
 
 // Large, readable list row. side may be a string or array of lines.
-function bigItem({ icon, title, badge, sub, side, mono, onclick, key, sid }) {
+// pin: a trailing control of its own (a span: a button cannot hold one)
+function bigItem({ icon, title, badge, sub, extra, side, mono, onclick, key, sid, pin }) {
   const sides = side == null ? [] : (Array.isArray(side) ? side : [side]).filter(Boolean);
   // sid: the row stands for that session and pulses with it (SESSION_ROWS)
   return el("button", { class: "item" + (sid && tabAwaiting(sid) ? " alert" : ""), onclick,
@@ -1017,8 +1152,9 @@ function bigItem({ icon, title, badge, sub, side, mono, onclick, key, sid }) {
     el("div", { class: "item-main" },
       el("div", { class: "item-title" + (mono ? " mono" : "") },
         el("span", { class: "item-name" }, title), badge || null),
-      sub ? el("div", { class: "item-sub" }, sub) : null),
-    sides.length ? el("div", { class: "item-side" }, sides.map((x) => el("div", null, x))) : null);
+      sub ? el("div", { class: "item-sub" }, sub) : null, extra || null),
+    sides.length ? el("div", { class: "item-side" }, sides.map((x) => el("div", null, x))) : null,
+    pin || null);
 }
 
 // Search input + filtered list; filters items on every keystroke.
@@ -1738,7 +1874,7 @@ async function renderHome() {
   try {
     const projects = await loadProjects();
     if (S.view?.name !== "home") return;
-    const existing = projects.filter((p) => p.exists);
+    const existing = withPinnedProjects(projects.filter((p) => p.exists));
     const rows = existing.slice(0, 10).map(vsRow);
     if (existing.length > 10) {
       rows.push(el("button", { class: "vs-row", onclick: projectQuickOpen },
@@ -1756,7 +1892,8 @@ async function renderHome() {
 function vsRow(p) {
   return el("button", { class: "vs-row", "data-kbd": p.path, onclick: () => nav({ name: "project", path: p.path }) },
     el("span", { class: "vs-name" }, p.name),
-    el("span", { class: "vs-path" }, shortPath(p.path)));
+    el("span", { class: "vs-path" }, shortPath(p.path)),
+    loadProjectPins().includes(p.path) ? el("span", { class: "vs-pin", "aria-label": "Pinned" }, "📌") : null);
 }
 
 // quick-open search over all projects (the "More…" behavior)
@@ -2030,8 +2167,19 @@ function renderTabs() {
 
   const view = $("#view");
   const wrap = el("div", { class: "pad" });
-  // S.tabs ends with the most recently entered tab; show it first
-  const open = S.tabs.map((sid) => S.sessions.find((s) => s.sid === sid)).filter(Boolean).reverse();
+  // S.tabs ends with the most recently entered tab; show it first, after
+  // the pinned ones (sort is stable: each group keeps that order)
+  let open = S.tabs.map((sid) => S.sessions.find((s) => s.sid === sid)).filter(Boolean).reverse()
+    .sort((a, b) => tabPinned(b.sid) - tabPinned(a.sid));
+  // the order is fixed on entering Tabs (each entry is a new view object):
+  // re-renders on pinning and status updates keep the cards in place; a tab
+  // new since then goes first
+  const view0 = S.view;
+  if (view0.order) {
+    const at = (s) => view0.order.indexOf(s.sid);
+    open = open.sort((a, b) => at(a) - at(b));
+  }
+  view0.order = open.map((s) => s.sid);
   if (open.length) {
     wrap.append(el("div", { class: "tabs-grid" }, open.map(tabCard)));
   } else {
@@ -2069,6 +2217,9 @@ function tabCard(s) {
     el("div", { class: "tc-head" },
       el("span", { class: "dot " + st.state }),
       el("span", { class: "tc-title" }, s.title || "(new session)"),
+      el("span", { class: "tc-pin" + (tabPinned(s.sid) ? " on" : ""), role: "button",
+        "aria-label": tabPinned(s.sid) ? "Unpin tab" : "Pin tab",
+        onclick: (e) => { e.stopPropagation(); toggleTabPin(s.sid); renderTabs(); } }, "📌"),
       el("span", { class: "tc-menu", role: "button", "aria-label": "Tab actions",
         onclick: (e) => { e.stopPropagation(); tabMenu(s); } }, "⋯"),
       el("span", { class: "tc-close", role: "button", "aria-label": "Close tab",
@@ -2087,14 +2238,14 @@ function tabBusy(sid) {
   return ["working", "awaiting", "starting", "compacting"].includes(S.status[sid]?.state);
 }
 
-// "close all" keeps busy tabs and says how many stayed
+// "close all" keeps busy and pinned tabs and says how many stayed
 function closeIdleTabs() {
-  const idle = S.tabs.filter((sid) => !tabBusy(sid));
+  const idle = S.tabs.filter((sid) => !tabBusy(sid) && !tabPinned(sid));
   const kept = S.tabs.length - idle.length;
-  const keptText = `${kept} busy tab${kept > 1 ? "s" : ""}`;
-  if (!idle.length) { toast(`All tabs are busy — ${keptText} kept`); return; }
+  const keptText = `${kept} busy or pinned tab${kept > 1 ? "s" : ""}`;
+  if (!idle.length) { toast(`All tabs are busy or pinned — ${keptText} kept`); return; }
   confirmSheet(kept ? `Close ${idle.length} idle tab${idle.length > 1 ? "s" : ""}?` : "Close all tabs?",
-    (kept ? `${keptText} (working or awaiting approval) stay${kept > 1 ? "" : "s"} open. ` : "")
+    (kept ? `${keptText} stay${kept > 1 ? "" : "s"} open. ` : "")
     + "Sessions keep running — this only empties the tab switcher.",
     () => {
       for (const sid of idle) closeTab(sid);
@@ -2105,15 +2256,19 @@ function closeIdleTabs() {
 
 // Closing a tab looks destructive but only forgets the session here, so say
 // what it does and does not touch before the card disappears; a busy one
-// gets a warning and a red button. fromMenu: an idle tab closes at once.
+// gets a warning and a red button, a pinned one says it unpins too.
+// fromMenu: an idle, unpinned tab closes at once.
 function confirmCloseTab(s, fromMenu) {
   const done = () => { closeTab(s.sid); renderTabs(); };
   const keep = "The session and its process are untouched — reopen it from Sessions.";
+  const unpin = tabPinned(s.sid) ? "It is pinned: closing unpins it. " : "";
   if (tabBusy(s.sid)) {
     const what = S.status[s.sid].state === "awaiting" ? "is waiting for your approval" : "is still working";
     confirmSheet(`“${s.title || "session"}” ${what}`,
-      "Closing the tab hides it from the tab switcher and the Tabs alert. " + keep,
+      "Closing the tab hides it from the tab switcher and the Tabs alert. " + unpin + keep,
       done, "Close anyway");
+  } else if (unpin) {
+    confirmSheet(`Close pinned “${s.title || "session"}”?`, unpin + keep, done);
   } else if (fromMenu) {
     done();
   } else {
@@ -2133,6 +2288,11 @@ function tabMenu(s) {
       action: () => stopSession(s.sid, renderTabs) },
     S.canFiles && !s.incognito && { icon: "▤", label: "Files", sub: shortPath(s.cwd),
       action: () => nav({ name: "files", path: s.cwd }) },
+    tabPinned(s.sid)
+      ? { icon: "📌", label: "Unpin", sub: "Back in order of last use",
+        action: () => { toggleTabPin(s.sid); renderTabs(); } }
+      : { icon: "📌", label: "Pin", sub: "Stays first; close all skips it (this device)",
+        action: () => { toggleTabPin(s.sid); renderTabs(); } },
     { icon: "✕", label: "Close tab", sub: "Keeps the session; removes it from this switcher",
       action: () => confirmCloseTab(s, true) },
     deleteItem(s, renderTabs),
@@ -2152,8 +2312,9 @@ async function renderProjects() {
   } catch (e) { view.replaceChildren(el("div", { class: "pad" }, el("div", { class: "empty" }, "Could not load projects: " + e.message))); return; }
   if (S.view?.name !== "projects") return;
 
+  const items = withPinnedProjects(projects.filter((p) => p.exists));
   const { node } = searchableList({
-    items: projects.filter((p) => p.exists),
+    items,
     keys: ["name", "path"],
     placeholder: "Search projects…",
     empty: "No matching projects.",
@@ -2161,9 +2322,10 @@ async function renderProjects() {
       icon: "❯",
       title: p.name,
       sub: shortPath(p.path),
-      side: [relTime(p.last_active_ms), p.session_count ? p.session_count + " sessions" : ""],
+      side: [p.last_active_ms ? relTime(p.last_active_ms) : "", p.session_count ? p.session_count + " sessions" : ""],
       onclick: () => nav({ name: "project", path: p.path }),
       key: p.path,
+      pin: pinToggle(loadProjectPins().includes(p.path), () => toggleProjectPin(p.path)),
     }),
   });
   view.replaceChildren(el("div", { class: "pad" },
@@ -2233,7 +2395,7 @@ async function renderProject(path) {
 
   const modeRow = el("div", { class: "a-buttons", style: "margin-bottom:16px" });
   const renderModes = () => {
-    modeRow.replaceChildren(...["default", "acceptEdits", "plan"].map((m) =>
+    modeRow.replaceChildren(...S.defaults.modes.map((m) =>
       el("button", { class: "btn small" + (opts.mode === m ? " primary" : ""),
         onclick: () => { opts.mode = m; renderModes(); } }, m === "acceptEdits" ? "accept edits" : m)));
   };
@@ -2252,34 +2414,169 @@ async function renderProject(path) {
   view.replaceChildren(wrap);
 
   try {
-    const { sessions } = await T.rpc("projects.sessions", { cwd: path });
+    // the server lists the newest sessions only; it adds the pinned ones
+    const pinnedHere = Object.entries(loadPastPins()).filter(([, cwd]) => cwd === path).map(([id]) => id);
+    let { sessions, next } = await T.rpc("projects.sessions", { cwd: path, pinned: pinnedHere });
     const list = $("#past-list");
     if (!list) return;
-    list.replaceChildren();
-    if (!sessions.length) list.append(el("div", { class: "notice" }, "No past sessions in this project."));
-    for (const ps of sessions) {
-      // already a session here: open it as the session list does (fork and
-      // rename are in its ⋯ menu), rather than offering to resume it again
-      const held = ps.runner_sid;
-      list.append(bigItem({
-        title: ps.summary,
-        badge: held ? el("span", { class: "badge" }, "in sessions") : null,
-        sub: [ps.git_branch, pastSize(ps), (ps.session_id || "").slice(0, 8)].filter(Boolean).join(" · "),
-        side: ageSpan(ps.last_modified_ms, !!ps.context_tokens),
-        onclick: () => {
-          if (!held) { pastSessionSheet(path, ps, opts); return; }
-          const s = S.sessions.find((x) => x.sid === held);
-          if (s) openSession(s); else openChat(held);
-        },
-        key: ps.session_id,
-        sid: held || null,
-      }));
-    }
-    observeCards();
+    const newest = (a, b) => (b.last_modified_ms || 0) - (a.last_modified_ms || 0);
+    // sorted once, on entry: pinned first, each group newest first. A pin
+    // toggled here and a "Show more" page leave the rows above in place.
+    const pinnedNow = loadPastPins();
+    sessions.sort(newest).sort((a, b) => !!pinnedNow[b.session_id] - !!pinnedNow[a.session_id]);
+    // "Show more": the next page, minus what is already listed (a pinned
+    // session came with the first one), appended below
+    const more = async (btn) => {
+      btn.disabled = true;
+      try {
+        const r = await T.rpc("projects.sessions", { cwd: path, offset: next });
+        const have = new Set(sessions.map((ps) => ps.session_id));
+        sessions = [...sessions, ...r.sessions.filter((ps) => !have.has(ps.session_id)).sort(newest)];
+        next = r.next;
+        if ($("#past-list") === list) draw();
+      } catch (e) {
+        btn.disabled = false;
+        toast("Could not load more sessions: " + e.message, true);
+      }
+    };
+    const togglePin = (id) => {
+      const p = loadPastPins();
+      if (p[id]) delete p[id]; else p[id] = path;
+      savePastPins(p);
+    };
+    const draw = () => {
+      const pinned = loadPastPins();
+      list.replaceChildren();
+      if (!sessions.length) list.append(el("div", { class: "notice" }, "No past sessions in this project."));
+      for (const ps of sessions) {
+        // already a session here: open it as the session list does (fork and
+        // rename are in its ⋯ menu), rather than offering to resume it again
+        const held = ps.runner_sid;
+        list.append(bigItem({
+          title: ps.summary,
+          badge: held ? el("span", { class: "badge" }, "in sessions") : null,
+          sub: [ps.git_branch, pastSize(ps), (ps.session_id || "").slice(0, 8)].filter(Boolean).join(" · "),
+          side: ageSpan(ps.last_modified_ms, !!ps.context_tokens),
+          onclick: () => {
+            if (!held) { pastSessionSheet(path, ps, opts); return; }
+            const s = S.sessions.find((x) => x.sid === held);
+            if (s) openSession(s); else openChat(held);
+          },
+          key: ps.session_id,
+          sid: held || null,
+          pin: pinToggle(!!pinned[ps.session_id], () => togglePin(ps.session_id)),
+        }));
+      }
+      if (next != null) {
+        const btn = el("button", { class: "btn", style: "width:100%", onclick: () => more(btn) }, "Show more");
+        list.append(btn);
+      }
+      observeCards();
+    };
+    draw();
   } catch (e) {
     const list = $("#past-list");
     if (list) list.replaceChildren(el("div", { class: "notice error" }, "Could not list sessions: " + e.message));
   }
+}
+
+// ---------------------------------------------------------------- search
+// Past sessions by what was said in them (clicker4ai/search.py): names,
+// your prompts and Claude's replies. The server reads every transcript per
+// search, so it runs on ⏎, not per keystroke. The last results stay in
+// S.search, so back onto this screen does not search again.
+
+const SEARCH_HELP = 'All words in one paragraph · "exact phrase" · ? one character · '
+  + "* any text in a line · [nń] one of · words match from their start";
+
+function renderSearch() {
+  if (S.view?.name !== "search") return;
+  setTopbar(menuBtn(), tbTitle("Search"), tabsBtn());
+  const q0 = S.view.q || "";
+  const input = el("input", { class: "search-input", type: "search", value: q0,
+    placeholder: "Search past sessions…", enterkeyhint: "search",
+    autocapitalize: "none", autocorrect: "off", spellcheck: "false" });
+  const list = el("div", { class: "item-list" });
+  const view = $("#view");
+  view.replaceChildren(el("div", { class: "pad" }, input,
+    el("div", { class: "notice", style: "margin:-4px 0 12px" }, SEARCH_HELP), list));
+
+  const draw = () => {
+    const r = S.search;
+    list.replaceChildren();
+    if (!r.sessions.length) list.append(el("div", { class: "empty" }, "Nothing found."));
+    for (const ps of r.sessions) list.append(searchItem(ps));
+    if (r.next != null) {
+      const btn = el("button", { class: "btn", style: "width:100%", onclick: () => more(btn) }, "Show more");
+      list.append(btn);
+    }
+    observeCards();
+  };
+  const more = async (btn) => {
+    const r = S.search;
+    btn.disabled = true;
+    try {
+      const page = await T.rpc("projects.search", { q: r.q, offset: r.next });
+      const have = new Set(r.sessions.map((ps) => ps.session_id));
+      r.sessions = [...r.sessions, ...page.sessions.filter((ps) => !have.has(ps.session_id))];
+      r.next = page.next;
+      if (S.search === r && S.view?.name === "search") draw();
+    } catch (e) {
+      btn.disabled = false;
+      toast("Could not load more: " + e.message, true);
+    }
+  };
+  const run = async (q) => {
+    S.view = { name: "search", q };
+    histReplace(S.view);
+    list.replaceChildren(el("div", { class: "notice" }, "searching…"));
+    input.blur();
+    try {
+      const r = await T.rpc("projects.search", { q });
+      S.search = { q, sessions: r.sessions, next: r.next };
+      if (S.view?.name === "search" && S.view.q === q) draw();
+    } catch (e) {
+      if (S.view?.name === "search" && S.view.q === q)
+        list.replaceChildren(el("div", { class: "notice error" }, e.message));
+    }
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.isComposing) return;
+    e.preventDefault();
+    const q = input.value.trim();
+    if (q) run(q);
+  });
+
+  if (q0 && S.search?.q === q0) draw();
+  else if (q0) run(q0);
+  else if (finePointer()) input.focus();
+}
+
+function searchItem(ps) {
+  const sn = ps.snippet;
+  const held = ps.runner_sid;
+  return bigItem({
+    title: ps.summary,
+    badge: held ? el("span", { class: "badge" }, "in sessions") : null,
+    sub: [ps.cwd_short, pastSize(ps)].filter(Boolean).join(" · "),
+    extra: el("div", { class: "search-snip" },
+      el("span", { class: "search-role" }, ps.role === "assistant" ? "claude: "
+        : ps.role === "title" ? "name: " : "you: "),
+      ...(Array.isArray(sn) ? sn : []).map(([text, hit]) =>
+        hit ? el("mark", { class: "find-mark" }, text) : text)),
+    side: ageSpan(ps.last_modified_ms, !!ps.context_tokens),
+    key: ps.session_id,
+    sid: held || null,
+    onclick: () => {
+      if (held) {
+        if (ps.find?.length) S.pendingFind = { sid: held, q: ps.find };
+        const s = S.sessions.find((x) => x.sid === held);
+        if (s) openSession(s); else openChat(held);
+        return;
+      }
+      pastSessionSheet(ps.cwd, ps, { model: "default", mode: "default", find: ps.find });
+    },
+  });
 }
 
 // ---------------------------------------------------------------- files screen
@@ -2298,8 +2595,10 @@ function fmtBytes(n) {
 const fileUrl = (path, download) =>
   "/api/files/raw?path=" + encodeURIComponent(path) + (download ? "&download=1" : "");
 
+// from: the chat that opened the view (/files), kept while going through
+// folders; an upload started there returns to it, as /files upload does
 function filesGo(path) {
-  S.view = { name: "files", path: path || "" };
+  S.view = { name: "files", path: path || "", from: S.view?.from, sub: S.view?.sub };
   histReplace(S.view);
   renderFiles(S.view.path);
 }
@@ -2343,7 +2642,8 @@ async function renderFiles(path) {
     dir ? el("div", { class: "notice", style: "margin-top:0" }, shortPath(dir)) : null,
     el("div", { class: "a-buttons", style: "margin-bottom:10px" },
       data.parent != null ? el("button", { class: "btn small", onclick: () => filesGo(data.parent) }, "‹ up") : null,
-      dir && S.canUpload ? el("button", { class: "btn small", onclick: () => pickUpload(dir) }, "Upload…") : null),
+      dir && S.canUpload ? el("button", { class: "btn small", onclick: () => pickUpload(dir,
+        S.view.from ? () => { if (S.view?.name === "files") goBack(); } : null) }, "Upload…") : null),
     node));
 }
 
@@ -2371,7 +2671,13 @@ async function openFileAt(path, cwd) {
 
 function openFiles(sid) {
   const s = S.sessions.find((x) => x.sid === sid);
-  if (s?.cwd) nav({ name: "files", path: s.cwd });
+  if (!s?.cwd) return;
+  const view = { name: "files", path: s.cwd, from: sid };
+  if (S.view?.name !== "chat" || S.view.sid !== sid || S.viewerOpen) { nav(view); return; }
+  kbdReset(); closeSheet(); closeDrawer();
+  S.view = { ...view, sub: true };
+  histPush(S.view);
+  render();
 }
 
 // An image at most 1:1 with the screen's pixels (a 1179 px iPhone
@@ -2409,9 +2715,12 @@ function imageView(f, body) {
 
 // A find bar: the matches as <mark class="find-mark"> (case-insensitive, the
 // first FIND_MAX), ⏎ / ⇧⏎ or ↓ ↑ from one to the next, esc closes the bar
-// (not the viewer or the chat). search(q) marks the matches of q, or clears
-// them for "", and returns the marks in document order; `newestFirst`
-// starts at the last one (the chat, read from the bottom).
+// (not the viewer or the chat). search(q, terms) marks the matches of q, or
+// clears them for "", and returns the marks in document order; `newestFirst`
+// starts at the last one (the chat, read from the bottom), a `start` index
+// on the returned list overrides that. `terms`: the words of a search
+// result (show() with a list), marked each on its own until the text in
+// the bar is edited.
 const FIND_MAX = 2000;
 function findBar({ placeholder, search, newestFirst }) {
   const input = el("input", { type: "text", placeholder, enterkeyhint: "search",
@@ -2421,7 +2730,7 @@ function findBar({ placeholder, search, newestFirst }) {
   const bar = el("div", { class: "file-find", style: "display:none" }, input, count,
     btn("↑", "Previous match", () => go(-1)), btn("↓", "Next match", () => go(1)),
     btn("✕", "Close find", () => close()));
-  let marks = [], cur = -1, timer = 0;
+  let marks = [], cur = -1, timer = 0, terms = null;
   const label = () => {
     count.textContent = !input.value ? "" : !marks.length ? "none"
       : `${cur + 1}/${marks.length}${marks.length >= FIND_MAX ? "+" : ""}`;
@@ -2438,12 +2747,13 @@ function findBar({ placeholder, search, newestFirst }) {
     label();
   };
   const run = () => {
-    marks = search(input.value);
-    cur = newestFirst && marks.length ? 0 : -1;
-    go(newestFirst ? -1 : 1);
+    marks = search(input.value, terms);
+    cur = (marks.start ?? (newestFirst ? marks.length - 1 : 0)) - 1;
+    go(1);
     label();
   };
   input.addEventListener("input", () => {
+    terms = null;
     clearTimeout(timer);
     timer = setTimeout(() => { timer = 0; run(); }, 150);
   });
@@ -2461,6 +2771,7 @@ function findBar({ placeholder, search, newestFirst }) {
     clearTimeout(timer);
     bar.style.display = "none";
     input.value = "";
+    terms = null;
     run();
     input.blur();
   }
@@ -2469,13 +2780,45 @@ function findBar({ placeholder, search, newestFirst }) {
     input.focus();
     input.select();
   };
-  return { bar, open };
+  // opened with a text already in (a search result): no focus, so a phone
+  // keeps its keyboard down; a list is the result's words, each marked
+  const show = (q) => {
+    bar.style.display = "";
+    terms = Array.isArray(q) ? q : null;
+    input.value = terms ? terms.join(" ") : q;
+    run();
+  };
+  return { bar, open, show };
 }
 
 // a RegExp with "i", not toLowerCase(): lowering may change the length of
 // some characters and shift every index after them
 function findRe(q) {
-  return new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // longest first: "gitea" must not lose to a shorter word it starts with
+  const alt = (l) => [...l].sort((x, y) => y.length - x.length).map(esc).join("|");
+  return new RegExp(Array.isArray(q) ? alt(q) : esc(q), "giu");
+}
+
+// The first mark of the newest block (paragraph, list, heading…) that
+// holds every term: where the search found them all together — a later
+// mention of just one of them must not win. The server's paragraph may be
+// two blocks here ("Plan:" and its list), so then the newest message.
+function allTermsAt(marks, terms) {
+  const want = terms.map((w) => w.toLowerCase());
+  const scan = (blockOf) => {
+    for (let i = marks.length - 1; i >= 0;) {
+      const block = blockOf(marks[i]);
+      const seen = new Set();
+      let j = i;
+      for (; j >= 0 && blockOf(marks[j]) === block; j--) seen.add(marks[j].textContent.toLowerCase());
+      if (want.every((w) => seen.has(w))) return j + 1;
+      i = j;
+    }
+    return undefined;
+  };
+  return scan((mk) => mk.closest("p, li, pre, blockquote, table, h1, h2, h3, h4, h5, h6, .msg"))
+    ?? scan((mk) => mk.closest(".msg"));
 }
 
 // text with its matches wrapped in marks (pushed onto `marks`); null when
@@ -2521,10 +2864,10 @@ function chatFinder() {
     }
     marks = [];
   };
-  return findBar({ placeholder: "Find in chat…", newestFirst: true, search: (q) => {
+  return findBar({ placeholder: "Find in chat…", newestFirst: true, search: (q, terms) => {
     unmark();
     if (!q || !chatUI.msgs) return marks;
-    const re = findRe(q);
+    const re = findRe(terms || q);
     const nodes = [];
     for (const msg of chatUI.msgs.querySelectorAll(".msg.m-user, .msg.m-assist")) {
       const walk = document.createTreeWalker(msg, NodeFilter.SHOW_TEXT);
@@ -2535,6 +2878,12 @@ function chatFinder() {
       const frag = markMatches(n.data, re, marks);
       if (frag) n.replaceWith(frag);
     }
+    // a hit in a folded turn opens it: a hidden mark cannot be scrolled to
+    for (const mk of marks) {
+      const t = mk.closest(".turn.folded");
+      if (t) foldTurn(t, false, true);
+    }
+    if (terms) marks.start = allTermsAt(marks, terms);
     return marks;
   } });
 }
@@ -2593,42 +2942,126 @@ async function fileSheet(f, siblings = []) {
   }
 }
 
-function pickUpload(dir) {
-  const input = el("input", { type: "file", style: "display:none" });
+// One or more files; onPicked runs once they are chosen (a cancelled picker
+// fires nothing)
+function pickUpload(dir, onPicked) {
+  const input = el("input", { type: "file", multiple: "", style: "display:none" });
   input.addEventListener("change", () => {
-    const file = input.files?.[0];
+    const files = [...(input.files || [])];
     input.remove();
-    if (file) uploadFile(dir, file, file.name);
+    if (!files.length) return;
+    onPicked?.();
+    uploadFiles(dir, files);
   });
   document.body.append(input);
   input.click();
 }
 
+// One after another, so a name conflict asks about one file at a time
+async function uploadFiles(dir, files) {
+  const many = files.length > 1;
+  let done = 0;
+  for (const [i, f] of files.entries()) {
+    const r = await uploadFile(dir, f, f.name, many ? `${i + 1}/${files.length} ` : "");
+    if (r === "locked") return;
+    if (r) done += 1;
+  }
+  if (many) toast(`Uploaded ${done} of ${files.length} files to ${shortPath(dir)}`, done < files.length);
+  if (done && S.view?.name === "files" && S.view.path === dir) renderFiles(dir);
+}
+
 // An existing name is never overwritten: the server says 409 before
-// reading the body, and the file goes up again under a new name or not at all
-async function uploadFile(dir, file, name) {
+// reading the body, and the file goes up again under a new name or not at all.
+// true when it went up, false when not, "locked" when the session locked.
+async function uploadFile(dir, file, name, count = "") {
   const q = `?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent(name)}`;
-  toast(`Uploading ${name}…`);
+  toast(`Uploading ${count}${name}…`);
   let res;
   try {
     res = await fetch("/api/files/upload" + q, { method: "PUT", body: file,
       headers: { "Content-Type": "application/octet-stream", "X-C4AI-Upload": "1" } });
-  } catch (e) { toast("Upload failed: " + e.message, true); return; }
+  } catch (e) { toast("Upload failed: " + e.message, true); return false; }
   if (res.status === 409) {
     const next = await textSheet(`"${name}" already exists — new name`, { value: name, plain: true, maxlength: 255 });
-    if (next && next !== name) await uploadFile(dir, file, next);
-    else if (next === name) toast("That name is taken", true);
-    return;
+    if (next && next !== name) return uploadFile(dir, file, next, count);
+    if (next === name) toast("That name is taken", true);
+    return false;
   }
-  if (res.status === 423) { showLock(); return; }
+  if (res.status === 423) { showLock(); return "locked"; }
   if (!res.ok) {
     let detail = res.statusText;
     try { detail = (await res.json()).detail || detail; } catch {}
     toast("Upload failed: " + detail, true);
-    return;
+    return false;
   }
-  toast(`Uploaded ${name}`);
-  if (S.view?.name === "files" && S.view.path === dir) renderFiles(dir);
+  if (!count) toast(`Uploaded ${name}`);
+  return true;
+}
+
+// /files upload (or /files-upload) in a chat: the project's folders on a
+// sheet over the chat, never above the session's folder; picking the files
+// closes it, and the uploads report in toasts while the chat is back.
+// Keys: ⏎ acts on the highlighted row, which is "Choose files…" whenever a
+// folder opens, so ⏎ uploads here and ↓ ⏎ enters a folder; → enters the
+// highlighted folder, ← or Backspace goes up, u chooses files wherever the
+// highlight is. ⏎ waits out the grace period, so the ⏎ that sent the
+// command cannot also open the picker.
+async function uploadSheet(sid) {
+  const base0 = S.sessions.find((x) => x.sid === sid)?.cwd;
+  if (!base0) { toast("This session has no folder", true); return; }
+  const body = el("div", { class: "sheet-body" });
+  rawSheet(body);
+  const opened = Date.now();
+  // with a keyboard the keys leave the message box for the sheet at once
+  if (finePointer() && isTyping(document.activeElement)) document.activeElement.blur();
+  let base = null;   // the folder as the server names it (symlinks resolved)
+  let choose = null, up = null;   // up: the folder above, or null at the top
+  const current = () => {
+    const a = document.activeElement;
+    if (a && body.contains(a) && a.tagName === "BUTTON") return a;
+    return kbd.cur && body.contains(kbd.cur) ? kbd.cur : null;
+  };
+  S.sheetKeys = (key) => {
+    const act = {
+      Enter: () => { if (Date.now() - opened >= KBD_GRACE) current()?.click(); },
+      ArrowRight: () => { const d = current()?.dataset.dir; if (d) show(d); },
+      ArrowLeft: () => { if (up) show(up); },
+      Backspace: () => { if (up) show(up); },
+      u: () => choose?.click(),
+    }[key];
+    if (act) act();
+    return !!act;
+  };
+  const show = async (path) => {
+    choose = up = null;
+    const head = el("div", { class: "sheet-title" }, "Upload to…");
+    body.replaceChildren(head, el("div", { class: "notice" }, "Loading…"));
+    let data;
+    try {
+      data = await T.rpc("files.list", { path });
+    } catch (e) {
+      if (body.isConnected) body.replaceChildren(head, el("div", { class: "notice error" }, e.message));
+      return;
+    }
+    if (!body.isConnected || !data.path) return;
+    const dir = data.path;
+    base ??= dir;
+    const inside = dir !== base && dir.startsWith(base.replace(/\/$/, "") + "/");
+    up = inside && data.parent ? data.parent : null;
+    choose = el("button", { class: "btn primary", onclick: () => pickUpload(dir, closeSheet) },
+      "Choose files…", kHint("u"));
+    body.replaceChildren(head,
+      el("div", { class: "notice", style: "margin-top:0" }, shortPath(dir)),
+      el("div", { class: "a-buttons", style: "margin-bottom:10px" }, choose,
+        up ? el("button", { class: "btn", onclick: () => show(up) }, "‹ up", kHint("←")) : null),
+      ...data.entries.filter((f) => f.dir).map((f) =>
+        el("button", { class: "sheet-item", "data-dir": f.path, onclick: () => show(f.path) },
+          el("span", { class: "si-icon" }, "▸"),
+          el("div", { class: "si-main", style: "font-family:var(--mono)" }, f.name))));
+    kbd.cur = choose;
+    if (finePointer()) choose.focus({ preventScroll: true });
+  };
+  show(base0);
 }
 
 // "84k · opus-5": what resuming loads into the prompt cache again, and the
@@ -2703,7 +3136,11 @@ async function startSession(cwd, opts) {
       cwd, model: opts.model, mode: opts.mode,
       resume: opts.resume || null, fork: !!opts.fork, title: opts.title || "",
     };
-    const started = (snap) => { upsertSession(snap); openChat(snap.sid); };
+    const started = (snap) => {
+      upsertSession(snap);
+      if (opts.find?.length) S.pendingFind = { sid: snap.sid, q: opts.find };
+      openChat(snap.sid);
+    };
     try {
       started(await T.rpc("sessions.create", params));
     } catch (e) {
@@ -2813,6 +3250,17 @@ function renderChat(sid) {
 
   const msgs = el("div", { id: "msgs" });
   chatUI.msgs = msgs;
+  chatUI.turn = null;
+  // "follow the bottom" changes only on a scroll, never on growth: a tool
+  // card that opens on an error grows by more than the margin at once, and
+  // measured after the growth the chat would think it was scrolled away.
+  // Growth never moves scrollTop down, so a move up is the reader's own.
+  chatUI.follow = true;
+  let lastTop = 0;
+  msgs.addEventListener("scroll", () => {
+    if (msgs.scrollTop < lastTop - 1 || nearBottom()) chatUI.follow = nearBottom();
+    lastTop = msgs.scrollTop;
+  }, { passive: true });
   const statusLine = el("div", { id: "status-line", class: "quiet" },
     el("span", { class: "caret" }, "❯"), el("span", { class: "s-text" }, ""),
     el("span", { class: "s-usage" }, ""));
@@ -2856,6 +3304,9 @@ function renderChat(sid) {
   subscribe(sid);
   updateChatHeader();
   updateStatusLine();
+  // back in a chat, typing goes to the message box at once — only with a
+  // keyboard, a phone would pop its on-screen one over the transcript
+  if (finePointer() && !overlayOpen()) input.focus({ preventScroll: true });
 }
 
 function sendOrStop(fromKeyboard) {
@@ -2880,7 +3331,11 @@ function sendText(sid, text, fromKeyboard) {
     setDraft(sid, "");
     if (input) {   // gone if the view changed while the sheet was open
       input.value = ""; input.style.height = "auto";
-      if (!fromKeyboard) input.blur();
+      // sent with ↑: a phone drops its on-screen keyboard; with a mouse or
+      // trackpad (a keyboard at hand) the box keeps the caret for the reply
+      if (!fromKeyboard) {
+        if (finePointer()) input.focus({ preventScroll: true }); else input.blur();
+      }
     }
   }
 }
@@ -2937,14 +3392,15 @@ function resendPending(sid, { text, restored }) {
 // Palette entries an incognito chat leaves out: its mode stays default (plan
 // mode would wait for ExitPlanMode, a tool it does not have), its name stays
 // "Incognito", and skills, agents and MCP do not exist in it.
-const INCOGNITO_HIDDEN = new Set(["mode", "permissions", "rename", "library", "skills", "files"]);
+const INCOGNITO_HIDDEN = new Set(["mode", "permissions", "rename", "library", "skills", "files",
+  "files-upload"]);
 // CLI commands that still make sense there; the rest are skills or need files
 // (not /fast: twice the price per token, for a chat that gains little from speed)
 const INCOGNITO_CLI = new Set(["effort", "usage", "recap"]);
 
 // slash commands the app itself owns (instant feedback, no guessing)
 function handleLocalCommand(sid, text) {
-  const m = text.match(/^\/([a-z-]+)\s*(.*)$/i);
+  const m = text.match(/^\/([a-z-]+)\s*(.*)$/is);
   if (!m) return false;
   const [, cmd, rest] = m;
   if (INCOGNITO_HIDDEN.has(cmd.toLowerCase())
@@ -2960,10 +3416,17 @@ function handleLocalCommand(sid, text) {
     case "mode": case "permissions": modeSheet(sid); return true;
     case "info": case "context": infoSheet(sid); return true;
     case "find": chatUI.find?.open(); return true;
+    case "collapse": toggleCollapse(); return true;
     case "term": case "terminal": case "trueview": openTrueView(sid); return true;
     case "library": case "skills": nav({ name: "skills" }); return true;
     // without the grant a project's own /files command still goes through
-    case "files": if (S.canFiles) { openFiles(sid); return true; } break;
+    case "files":
+      if (/^upload$/i.test(rest.trim())) {
+        if (S.canUpload) { uploadSheet(sid); return true; }
+        break;
+      }
+      if (S.canFiles) { openFiles(sid); return true; } break;
+    case "files-upload": if (S.canUpload) { uploadSheet(sid); return true; } break;
   }
   return false;
 }
@@ -3264,9 +3727,17 @@ function renderChatTranscript(sid) {
   if (!msgs) return;
   chatUI.byTool = {}; chatUI.byReq = {}; chatUI.provText = []; chatUI.provThink = [];
   msgs.replaceChildren();
+  chatUI.turn = null;
   for (const ev of S.events[sid] || []) renderEvent(sid, ev, false);
+  applyCollapse(false);
   scrollBottom(true);
   kbdCards();
+  // opened from a search result: find its text once the transcript is in
+  const pf = S.pendingFind;
+  if (pf && pf.sid === sid && (S.events[sid] || []).length) {
+    S.pendingFind = null;
+    chatUI.find?.show(pf.q);
+  }
 }
 
 function renderLiveEvent(sid, ev) {
@@ -3283,7 +3754,94 @@ function nearBottom() {
 
 function scrollBottom(force) {
   const m = chatUI.msgs;
-  if (m && (force || nearBottom())) m.scrollTop = m.scrollHeight;
+  if (!m) return;
+  if (force) chatUI.follow = true;
+  if (chatUI.follow) m.scrollTop = m.scrollHeight;
+}
+
+// ---------- turns: a prompt and everything up to the next one ----------
+// Folded, a turn shows the prompt and the last paragraph of the answer (the
+// conclusion and question sit at the end). "Collapse turns" is remembered
+// per device and folds every turn but the last two; a turn opened or closed by
+// hand stays so until the chat is rendered again or the mode is switched.
+const COLLAPSE_KEY = "c4ai_collapse";
+const collapseOn = () => localStorage.getItem(COLLAPSE_KEY) === "1";
+
+function newTurn(userNode) {
+  const t = el("div", { class: userNode ? "turn" : "turn pre" });
+  t._sum = el("button", { class: "turn-sum", onclick: () => foldTurn(t, false, true) });
+  t._body = el("div", { class: "turn-body" });
+  // "▴ collapse" twice: at the top where the folded box was tapped, and at
+  // the end for whoever read down to it
+  const fold = (where) => el("button", { class: "turn-fold " + where, "aria-label": "Collapse this turn",
+    onclick: () => foldTurn(t, true, true) }, "▴ collapse");
+  if (userNode) t.append(userNode, t._sum, fold("top"));
+  t.append(t._body);
+  if (userNode) t.append(fold("end"));
+  chatUI.msgs.append(t);
+  chatUI.turn = t;
+  return t;
+}
+
+function foldTurn(t, on, manual) {
+  // a turn waiting for an answer on one of its cards stays open
+  if (on && (t.classList.contains("pre") || t._body.querySelector(".action-card:not(.resolved)"))) return;
+  if (manual) t.dataset.manual = "1";
+  if (on) fillTurnSummary(t);
+  t.classList.toggle("folded", on);
+}
+
+// The last paragraph; when it is short ("Agree to 1–3?", a lone question)
+// the block before it too, so the list it asks about shows. A paragraph
+// gets 3 lines, a list up to 6 items of 2 lines each.
+const SUM_SHORT = 80, SUM_ITEMS = 6;
+const isList = (n) => n.tagName === "UL" || n.tagName === "OL";
+
+function fillTurnSummary(t) {
+  const texts = t._body.querySelectorAll(":scope > .m-assist");
+  const last = texts[texts.length - 1];
+  const blocks = !last ? [] : last.children.length ? [...last.children] : [last];
+  let tail = blocks.slice(-1);
+  if (blocks.length > 1 && !isList(tail[0]) && tail[0].textContent.trim().length < SUM_SHORT) tail = blocks.slice(-2);
+  const shown = tail.map((b) => {
+    if (!isList(b)) return el("div", { class: "ts-text" }, b.textContent.trim());
+    // numbers as text: the box is a <button>, which draws no list markers
+    const items = [...b.children].filter((li) => li.tagName === "LI");
+    const start = Number(b.getAttribute("start")) || 1;
+    const list = el("div", { class: "ts-list" },
+      ...items.slice(0, SUM_ITEMS).map((li, i) => el("div", { class: "ts-row" },
+        el("span", { class: "ts-n" }, b.tagName === "OL" ? `${start + i}.` : "•"),
+        el("div", { class: "ts-li" }, li.textContent.trim()))));
+    return items.length > SUM_ITEMS ? [list, el("div", { class: "ts-more" }, "…")] : list;
+  }).flat();
+  const tools = t._body.querySelectorAll(".tool-card").length;
+  const meta = [tools ? `${tools} tool${tools === 1 ? "" : "s"}` : "",
+    t._body.querySelector(".turn-result")?.textContent || ""].filter(Boolean).join(" · ");
+  t._sum.replaceChildren(
+    ...(shown.length ? shown : [el("div", { class: "ts-text" }, "(no reply text)")]),
+    el("div", { class: "ts-meta" }, "▸ " + (meta || "expand")));
+}
+
+// fold (mode on) or open every turn by the mode; the last two stay open (a
+// running turn and the one finished before it)
+function applyCollapse(reset) {
+  const m = chatUI.msgs;
+  if (!m) return;
+  const turns = [...m.querySelectorAll(":scope > .turn")];
+  const on = collapseOn();
+  turns.forEach((t, i) => {
+    if (reset) delete t.dataset.manual;
+    if (t.dataset.manual) return;
+    foldTurn(t, on && i < turns.length - 2, false);
+  });
+  scrollBottom(false);
+}
+
+function toggleCollapse() {
+  if (collapseOn()) localStorage.removeItem(COLLAPSE_KEY);
+  else localStorage.setItem(COLLAPSE_KEY, "1");
+  applyCollapse(true);
+  toast(collapseOn() ? "Turns collapsed — tap one to open it" : "Turns expanded");
 }
 
 function appendMsg(node, parentToolId) {
@@ -3295,7 +3853,7 @@ function appendMsg(node, parentToolId) {
     }
     nest.append(node);
   } else {
-    chatUI.msgs.append(node);
+    (chatUI.turn || newTurn(null))._body.append(node);
   }
   scrollBottom(false);
 }
@@ -3306,11 +3864,18 @@ function renderEvent(sid, ev, live) {
       finalizeProvisionals();
       // "edit from here" sits on a ✎ in the corner, not on the bubble: a
       // tap on the text would take over the long press that selects it
-      appendMsg(el("div", { class: ev.external ? "msg m-user external" : "msg m-user",
-        "data-seq": ev.seq || "" },
-        ev.seq ? el("button", { class: "m-edit", "aria-label": "Edit from here",
-          onclick: () => editFromHere(sid, ev.seq) }, "✎") : null,
-        ev.text));
+      {
+        const prev = chatUI.turn;
+        newTurn(el("div", { class: ev.external ? "msg m-user external" : "msg m-user",
+          "data-seq": ev.seq || "" },
+          ev.seq ? el("button", { class: "m-edit", "aria-label": "Edit from here",
+            onclick: () => editFromHere(sid, ev.seq) }, "✎") : null,
+          ev.text));
+        // the turn before the previous one: the running and the last finished stay open
+        const older = prev?.previousElementSibling;
+        if (older?.classList.contains("turn") && !older.dataset.manual && collapseOn()) foldTurn(older, true, false);
+        scrollBottom(false);
+      }
       markEditable();
       if (live) scrollBottom(true);
       break;
@@ -3527,6 +4092,7 @@ function fillToolResult(ev) {
     body.append(el("div", { class: "out-label" }, ev.is_error ? "error" : "output"),
       el("pre", null, ev.text));
     if (ev.is_error) card.classList.add("open");
+    scrollBottom(false);
   }
 }
 
@@ -3737,23 +4303,28 @@ function resolveActionCard(ev) {
 
 // ---------------------------------------------------------------- palette & sheets
 
+const PALETTE_GRACE = 400;   // ms after the "/" list opens
+
 function palette(sid) {
   const meta = S.meta[sid] || {};
   const incognito = !!S.sessions.find((x) => x.sid === sid)?.incognito;
   // your own commands (~/.claude/commands) stay; the CLI list does not say
   // which of its entries are skills, so everything else is filtered by name
   const own = new Set((S.library?.commands || []).filter((c) => c.scope === "user").map((c) => c.name));
-  // most used first; /clear last, so a stray tap at the top cannot wipe the context
+  // the user's order: most used first; /clear last, so a stray tap at the
+  // top cannot wipe the context
   const appCmds = [
     { name: "btw", desc: "Side question, kept out of the conversation", act: () => btwSheet(sid) },
-    S.canFiles && { name: "files", desc: "Browse this project's files", act: () => openFiles(sid) },
     { name: "compact", desc: "Summarize old messages to free context", act: () => confirmCompact(sid) },
-    { name: "rename", desc: "Rename this session",
-      act: () => renameSession(S.sessions.find((x) => x.sid === sid) || { sid }) },
+    S.canFiles && { name: "files", desc: "Browse this project's files", act: () => openFiles(sid) },
+    S.canUpload && { name: "files-upload", desc: "Upload files into this project", act: () => uploadSheet(sid) },
+    { name: "find", desc: "Find in this chat (⌘F)", act: () => chatUI.find?.open() },
     { name: "model", desc: "Change model", act: () => modelSheet(sid) },
     { name: "mode", desc: "Change permission mode", act: () => modeSheet(sid) },
     { name: "info", desc: "Session info, context, MCP status", act: () => infoSheet(sid) },
-    { name: "find", desc: "Find in this chat (⌘F)", act: () => chatUI.find?.open() },
+    { name: "rename", desc: "Rename this session",
+      act: () => renameSession(S.sessions.find((x) => x.sid === sid) || { sid }) },
+    { name: "collapse", desc: (collapseOn() ? "Expand" : "Collapse") + " all turns (c)", act: toggleCollapse },
     { name: "library", desc: "Skills, commands, agents, MCP", act: () => nav({ name: "skills" }) },
     { name: "clear", desc: "Start fresh context in this chat", act: () => confirmClear(sid) },
   ].filter((c) => c && (!incognito || !INCOGNITO_HIDDEN.has(c.name)));
@@ -3773,6 +4344,9 @@ function palette(sid) {
 
   const body = el("div", { class: "sheet-col" });
   const search = el("input", { type: "search", placeholder: "Filter commands…" });
+  // the list slides up as it opens, so a click meant for above it could land
+  // on a row moving under the pointer; such early clicks are dropped
+  const opened = Date.now();
   const list = el("div", { class: "sheet-body" });
 
   const draw = (filter) => {
@@ -3784,12 +4358,20 @@ function palette(sid) {
       list.append(el("div", { class: "eyebrow" }, title));
       for (const c of vis) {
         list.append(el("button", { class: "sheet-item", onclick: () => {
+          if (Date.now() - opened < PALETTE_GRACE) return;
           closeSheet();
           if (c.act) c.act();
           else {
+            // goes in front of what is typed, never in its place: a stray
+            // pick once wiped half a prompt. A command picked before is
+            // swapped for this one.
             const input = $("#chat-input");
-            input.value = "/" + c.name + " ";
+            const rest = input.value.replace(new RegExp(`^/(${cliCmds.map((x) =>
+              x.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")}) `), "");
+            const head = "/" + c.name + " ";
+            input.value = head + rest;
             input.focus();
+            input.setSelectionRange(head.length, head.length);
             input.dispatchEvent(new Event("input"));
           }
         } },
@@ -3848,9 +4430,6 @@ function btwSheet(sid, question = "") {
     if (homeEnd(input, e)) return;
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
   });
-  const copy = (text) => navigator.clipboard?.writeText(text)
-    .then(() => toast("Copied"), () => toast("Copy failed", true))
-    ?? toast("Copy needs https", true);
 
   btwUI.draw = (changed) => {
     if (changed !== sid) return;
@@ -3874,7 +4453,7 @@ function btwSheet(sid, question = "") {
         el("div", { class: "btw-meta" },
           // a side question costs fractions of a cent; fmtCost would say $0.00
           x.cost != null ? "$" + x.cost.toFixed(x.cost < 0.1 ? 3 : 2) : "",
-          x.state === "done" ? el("button", { class: "btn small", onclick: () => copy(x.a) }, "Copy") : null)]);
+          x.state === "done" ? el("button", { class: "btn small", onclick: () => copyText(x.a) }, "Copy") : null)]);
     const folded = (x) => el("button", { class: "btw-old", onclick: () => { shown = x.id; btwUI.draw(sid); } },
       el("div", { class: "btw-q" }, x.q),
       el("div", { class: "btw-snip" }, (x.a || "…").slice(0, 140)));
@@ -3909,6 +4488,7 @@ const MODE_INFO = {
   default: "Ask before risky tools",
   acceptEdits: "Auto-accept file edits",
   plan: "Plan first — no execution",
+  auto: "A classifier approves instead of you (not on Haiku)",
   dontAsk: "Deny anything not pre-allowed",
   bypassPermissions: "Run everything without asking",
 };
@@ -4013,6 +4593,8 @@ function infoSheet(sid) {
   const foot = el("div", { class: "a-buttons" },
     s.incognito ? null : el("button", { class: "btn", onclick: () => { closeSheet(); renameSession(s); } }, "Rename"),
     forkItem(s) ? el("button", { class: "btn", onclick: () => { closeSheet(); forkItem(s).action(); } }, "Fork") : null,
+    el("button", { class: "btn", onclick: () => { closeSheet(); toggleCollapse(); } },
+      collapseOn() ? "Expand turns" : "Collapse turns"),
     el("button", { class: "btn", onclick: () => { closeSheet(); confirmCompact(sid); } }, "Compact"),
     el("button", { class: "btn", onclick: () => { closeSheet(); confirmClear(sid); } }, "Clear"),
     el("button", { class: "btn", onclick: () => { closeSheet(); wsSend({ type: "refresh_context", session_id: sid }); } }, "Refresh"),
@@ -4352,14 +4934,16 @@ function keysSheet() {
     ["search · message box in a chat", "/"],
     ["message box", "i"],
     ["in it: start · end of the line (⇧ selects)", "home · end"],
-    ["close sheet, leave a text field", "esc"],
+    ["close sheet or the files screen, leave a text field", "esc"],
     ["back", "⌫  ["],
     ["Home · Sessions · Projects · Tabs", "g h · g s · g p · g t"],
     ["Allow · Always · Deny · Deny with note", "1 y · 2 · 3 n · 4"],
     ["answer a question · plan choice", "1–9"],
     ["file: scroll · page · prev/next · download · close", "↑ ↓ · space · ← → · d · ⏎"],
     ["file: find in the text · next / previous match", "/ or ⌘F · ⏎ / ⇧⏎"],
+    ["upload: highlighted row · into folder · up · choose files", "⏎ · → · ← · u"],
     ["chat: find in the messages (or /find)", "⌘F · ⏎ / ⇧⏎"],
+    ["chat: collapse · expand all turns (or /collapse)", "c"],
   ];
   rawSheet(el("div", { class: "sheet-body" },
     el("div", { class: "sheet-title" }, "Keyboard shortcuts"),
@@ -4377,6 +4961,8 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (overlayOpen()) { closeSheet(); closeDrawer(); }
     else if (isTyping(t)) t.blur();
+    // the files screen closes like the upload sheet does (back to the chat)
+    else if (S.view?.name === "files") { e.preventDefault(); goBack(); }
     return;
   }
   // ⌘F / Ctrl+F in the file viewer and in the chat opens the app's own
@@ -4434,6 +5020,7 @@ document.addEventListener("keydown", (e) => {
       if (btn) return go(() => btn.click());
     }
     if (key === "/" || key === "i") return go(() => $("#chat-input")?.focus());
+    if (key === "c") return go(toggleCollapse);
     return;
   }
   if (key === ".") {

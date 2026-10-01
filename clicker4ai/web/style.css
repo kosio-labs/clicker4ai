@@ -32,6 +32,15 @@
   --app-h: 100%;
   --app-top: 0px;
 }
+/* iPadOS 27 draws a Liquid Glass blur below the status bar of a
+   home-screen app; no CSS turns it off, so the top bar moves below it.
+   Only on an iPad: -webkit-touch-callout is iOS/iPadOS Safari only, and
+   both sides from 700px leave out phones, also in landscape. */
+@supports (-webkit-touch-callout: none) {
+  @media (display-mode: standalone) and (min-width: 700px) and (min-height: 700px) {
+    :root { --sat: calc(env(safe-area-inset-top, 0px) + 20px); }
+  }
+}
 @media (prefers-color-scheme: light) {
   :root {
     --bg: #f6f1ea;
@@ -217,7 +226,7 @@ a { color: var(--accent); }
 .s-card .meta-row .active { color: var(--accent); font-weight: 700; }
 .s-card .meta-row .error { color: var(--err); font-weight: 700; }
 .s-card .meta-row .running, .tab-card .tc-meta .running { color: var(--ok); font-weight: 700; }
-.s-card .meta-row .stopped, .tab-card .tc-meta .stopped { color: var(--faint); }
+.s-card .meta-row .stopped, .tab-card .tc-meta .stopped { color: var(--faint); font-weight: 700; }
 /* last activity inside the prompt-cache TTL (ageSpan in app.js) */
 .age.warm { color: var(--ok); }
 
@@ -303,6 +312,7 @@ a { color: var(--accent); }
   font-family: var(--mono); font-size: 16px; font-weight: 700;
   /* left: room for the ❮ menu button sitting over the drawer */
   padding: 6px 10px 16px 46px;
+  cursor: pointer;
 }
 .drawer-nav { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .nav-item {
@@ -497,6 +507,14 @@ a { color: var(--accent); }
 .m-assist pre::-webkit-scrollbar-track { background: transparent; }
 .m-assist pre::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
 .m-assist pre code { background: none; padding: 0; font-size: inherit; }
+.code-wrap { position: relative; }
+.code-copy {
+  position: absolute; top: 6px; right: 6px;
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--dim); font-size: 14px; line-height: 1; padding: 6px 8px; cursor: pointer;
+}
+/* drawn, not text: a summary, a selection or find never picks it up */
+.code-copy::before { content: "⧉"; }
 .m-assist blockquote { border-left: 3px solid var(--border); padding-left: 10px; color: var(--dim); margin: 8px 0; }
 .m-assist table { border-collapse: collapse; margin: 8px 0; font-size: 13px; display: block; overflow-x: auto; }
 .m-assist th, .m-assist td { border: 1px solid var(--border); padding: 5px 9px; text-align: left; }
@@ -636,6 +654,36 @@ a { color: var(--accent); }
   font-family: var(--mono); font-size: 10.5px; color: var(--faint);
   margin: 2px 0 14px; text-align: right;
 }
+/* turns: folded, the prompt + the answer's last paragraph (3 lines) */
+.turn-sum, .turn.folded > .turn-body, .turn.folded > .turn-fold { display: none; }
+.turn.folded > .turn-sum { display: block; }
+.turn-sum {
+  width: 100%; margin: 0 0 14px; padding: 8px 10px; text-align: left;
+  background: none; border: 1px dashed var(--border); border-radius: 10px;
+  color: var(--text); font: inherit; cursor: pointer;
+}
+.turn-sum .ts-text {
+  font-size: 14px; line-height: 1.45; word-break: break-word;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.turn-sum * + .ts-text, .turn-sum .ts-text + .ts-list { margin-top: 6px; }
+.turn-sum .ts-list { font-size: 14px; line-height: 1.45; }
+.turn-sum .ts-row { display: flex; gap: 6px; margin-bottom: 2px; }
+.turn-sum .ts-n { flex: none; min-width: 1.2em; color: var(--dim); }
+.turn-sum .ts-li {
+  flex: 1; min-width: 0;
+  word-break: break-word;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.turn-sum .ts-more { font-size: 14px; color: var(--dim); }
+.turn-sum .ts-meta { margin-top: 4px; font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+.turn-fold {
+  display: block; margin: -10px auto 12px 0; padding: 2px 4px;
+  background: none; border: none; font-family: var(--mono); font-size: 10.5px;
+  color: var(--faint); cursor: pointer;
+}
+.turn-fold.top { margin: -6px auto 8px 0; }
+.turn:last-child > .turn-fold { display: none; }
 
 /* status line + composer */
 #status-line {
@@ -936,3 +984,27 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .q-label .k-hint { margin: 0 8px 0 0; }
   .action-card.kbd-target { box-shadow: 0 0 0 1px var(--warn); }
 }
+
+/* pins: a mark on a pinned tab card, a toggle on project list rows */
+.tab-card .tc-pin {
+  flex: none; width: 22px; height: 24px; margin: -3px 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; line-height: 1; opacity: .25; filter: grayscale(1);
+}
+.tab-card .tc-pin.on { opacity: 1; filter: none; }
+.vs-row .vs-pin { flex: none; margin-left: auto; font-size: 12px; }
+.item-pin {
+  flex: none; align-self: stretch; display: flex; align-items: center;
+  /* the whole right edge of the row is the target, not the glyph alone */
+  margin: -16px -15px -16px -8px; padding: 0 15px 0 8px;
+  font-size: 15px; line-height: 1; opacity: .25; filter: grayscale(1);
+}
+.item-pin.on { opacity: 1; filter: none; }
+
+/* ---------- search (past sessions) ---------- */
+.search-snip {
+  font-size: 13.5px; color: var(--text); margin-top: 6px; line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden; word-break: break-word;
+}
+.search-role { color: var(--faint); font-family: var(--mono); font-size: 11.5px; }

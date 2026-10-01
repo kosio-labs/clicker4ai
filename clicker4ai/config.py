@@ -39,6 +39,12 @@ DEFAULT_MAX_RUNNERS = 6
 DEFAULT_LOCK_IDLE_MINUTES = 15
 LOG_LEVELS = ("error", "warning", "info", "debug")
 DEFAULT_LOG_LEVEL = "warning"
+
+
+class ConfigError(ValueError):
+    """config.json holds something the server cannot run with; cli.main
+    prints the message alone, without a traceback."""
+
 # Incognito chats (sessions.py): each gets a fresh folder
 # INCOGNITO_DIR/<device id>/<sid>, erased together with everything Claude Code
 # kept for it after INCOGNITO_IDLE_HOURS without activity or when its device
@@ -136,7 +142,7 @@ def _parse_host(raw) -> str:
     if raw is None:
         return DEFAULT_HOST
     if not isinstance(raw, str) or not raw.strip() or any(c.isspace() for c in raw.strip()):
-        raise ValueError("config.json: host must be an IP address or a host name")
+        raise ConfigError("config.json: host must be an IP address or a host name")
     return raw.strip()
 
 
@@ -144,13 +150,13 @@ def _parse_port(raw) -> int:
     if raw is None:
         return DEFAULT_PORT
     if isinstance(raw, bool) or (isinstance(raw, float) and not raw.is_integer()):
-        raise ValueError("config.json: port must be a whole number")
+        raise ConfigError("config.json: port must be a whole number")
     try:
         value = int(raw)
     except (TypeError, ValueError):
-        raise ValueError("config.json: port must be a number")
+        raise ConfigError("config.json: port must be a number")
     if not 1 <= value <= 65535:
-        raise ValueError("config.json: port must be between 1 and 65535")
+        raise ConfigError("config.json: port must be between 1 and 65535")
     return value
 
 
@@ -160,9 +166,9 @@ def _parse_max_runners(raw) -> int:
     try:
         value = int(raw)
     except (TypeError, ValueError):
-        raise ValueError("config.json: max_runners must be a positive integer")
+        raise ConfigError("config.json: max_runners must be a positive integer")
     if value < 1:
-        raise ValueError("config.json: max_runners must be at least 1")
+        raise ConfigError("config.json: max_runners must be at least 1")
     return value
 
 
@@ -172,9 +178,9 @@ def _parse_lock_idle(raw) -> int:
     try:
         value = int(raw)
     except (TypeError, ValueError):
-        raise ValueError("config.json: lock_idle_minutes must be a whole number")
+        raise ConfigError("config.json: lock_idle_minutes must be a whole number")
     if value < 0:
-        raise ValueError("config.json: lock_idle_minutes must be 0 (off) or more")
+        raise ConfigError("config.json: lock_idle_minutes must be 0 (off) or more")
     return value
 
 
@@ -182,7 +188,7 @@ def _parse_log_level(raw) -> str:
     if raw is None:
         return DEFAULT_LOG_LEVEL
     if not isinstance(raw, str) or raw.lower() not in LOG_LEVELS:
-        raise ValueError("config.json: log_level must be one of "
+        raise ConfigError("config.json: log_level must be one of "
                          + ", ".join(LOG_LEVELS))
     return raw.lower()
 
@@ -194,21 +200,21 @@ def _parse_roots(raw) -> list[str]:
     tokens) through browse and the session tools. So is a root inside
     PROTECTED_DIRS; a root that contains one is fine (scope.py hides it)."""
     if raw is None:
-        raise ValueError('config.json: set "allowed_roots" to the folders '
-                         'devices may use, e.g. ["~/work"]')
+        raise ConfigError("No folders set: run `c4ai config roots add ~/work` "
+                          "(the folders devices may use)")
     if not isinstance(raw, list) or not raw \
             or not all(isinstance(r, str) and r.strip() for r in raw):
-        raise ValueError("config.json: allowed_roots must be a non-empty list of paths")
+        raise ConfigError("config.json: allowed_roots must be a non-empty list of paths")
     roots = [Path(r).expanduser().resolve() for r in raw]
     home = Path.home().resolve()
     for r in roots:
         if home.is_relative_to(r):
-            raise ValueError(f"config.json: allowed_roots must not contain {r} "
+            raise ConfigError(f"config.json: allowed_roots must not contain {r} "
                              "(the home directory or above); use sub-folders, "
                              'e.g. ["~/work"]')
         for d in PROTECTED_DIRS:
             if r.is_relative_to(d):
-                raise ValueError(f"config.json: allowed_roots must not contain {r}: "
+                raise ConfigError(f"config.json: allowed_roots must not contain {r}: "
                                  f"it lies in {d}, which no device may reach")
     return [str(r) for r in roots]
 
@@ -229,7 +235,14 @@ class Config:
         secure_dir(SESSIONS_DIR)
         _harden_existing()
         if CONFIG_PATH.exists():
-            raw = json.loads(CONFIG_PATH.read_text())
+            try:
+                raw = json.loads(CONFIG_PATH.read_text())
+            except ValueError as e:
+                raise ConfigError(f"{CONFIG_PATH} is not valid JSON ({e}); "
+                                  "fix it by hand") from None
+            if not isinstance(raw, dict):
+                raise ConfigError(f"{CONFIG_PATH} must hold a JSON object; "
+                                  "fix it by hand")
         else:
             raw = {}
         # The long-lived master token is gone (login = one-time pairing codes);

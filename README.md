@@ -1,22 +1,31 @@
 # Clicker4AI
 
-*Formerly “[Better Claude RC](#license)” (`better-claude-rc`), then briefly
-Clicker4Claude — until someone read the trademark guidelines. The “AI” is doing
-a lot of legal work here.*
+*An independent open-source project, not affiliated with Anthropic.
+Formerly “[Better Claude RC](#license)” (`better-claude-rc`), then briefly
+Clicker4Claude — until someone read the trademark guidelines (see
+[Authentication and trademarks](#authentication-and-trademarks)).*
 
-A self-hosted PWA that turns your phone, tablet or laptop into a proper remote
-control for [Claude Code](https://claude.com/claude-code) sessions running on
-your Linux server.
+> **Status:** the last release candidate before 1.0.0. Only fixes go in
+> until then; feature requests are welcome and come after 1.0.0.
+
+<br>
+
+A self-hosted PWA (a web app you can add to the home screen like an app)
+that turns your phone, tablet or laptop into a proper remote control for
+[Claude Code](https://claude.com/claude-code) running on your own Linux
+machine.
 
 Start, resume, and drive real Claude Code sessions from any device with a
 browser — with a structured event stream (tool cards, diffs, thinking),
 tap-to-approve permissions, and live two-way sync with the terminal on the
 server. It's a small FastAPI +
 [claude-agent-sdk](https://github.com/anthropics/claude-agent-sdk-python)
-backend and a dependency-free vanilla-JS frontend. **No build step, no cloud, no
-account** — the server runs on your machine and your devices talk to it over
-your own network. Several devices can watch and drive the same session; switch
-from the phone to the laptop mid-task without stopping anything.
+(Anthropic's Agent SDK, the library that drives Claude Code) backend and a
+dependency-free vanilla-JS frontend. **No build step, no hosted service,
+no sign-up** — it runs on a computer you control, and your devices connect
+to it directly (over a local network or a VPN), with no third-party service
+in between. Several devices can watch and drive the same session; switch from
+the phone to the laptop mid-task without stopping anything.
 
 > Built for driving Claude Code away from the keyboard: new sessions from any
 > device, structured (not terminal-scraped) output, and a UI that works on a
@@ -33,60 +42,17 @@ from the phone to the laptop mid-task without stopping anything.
   <img src="https://raw.githubusercontent.com/kosio-labs/clicker4ai/main/assets/screenshots/tabs.png" width="150" alt="Tabs">
 </p>
 
-*An independent open-source project, not affiliated with Anthropic (see
-[Authentication and trademarks](#authentication-and-trademarks)).*
-
-> **Status:** release candidate. Linux, Python ≥ 3.13, and the Claude Code
-> CLI installed and signed in (an API key, a cloud provider or a claude.ai
-> account — see [Requirements](#requirements)).
->
-> **Mind the reach:** a device gets only the folders you grant it, but a
-> session may still touch files outside its folder within the permissions
-> you approve. Read the [Security model](#security-model) before you let
-> other devices reach the server.
-
-**Contents:** [Quickstart](#quickstart) ·
-[Works well with](#works-well-with) ·
+**Contents:** [Works well with](#works-well-with) ·
+[Requirements](#requirements) · [Quickstart](#quickstart) ·
+[Features](#features) ·
 [Clicker4AI and Remote Control](#clicker4ai-and-claude-code-remote-control) ·
-[Features](#features) · [Running the server](#running-the-server) ·
+[Running the server](#running-the-server) ·
 [Configuration](#configuration) · [Devices and grants](#devices-and-grants) ·
 [Passkeys](#passkeys) · [True View](#true-view) ·
-[Reverse proxy](#reverse-proxy-caddy) · [Requirements](#requirements) ·
+[Reverse proxy](#reverse-proxy) ·
 [Authentication and trademarks](#authentication-and-trademarks) ·
 [Security model](#security-model) · [Development](#development) ·
 [Changes](#changes)
-
-## Quickstart
-
-Requires Python ≥ 3.13 and [pipx](https://pipx.pypa.io) (or `uv tool
-install` in its place). If pipx's default Python is older, add `--python
-python3.13`.
-
-```bash
-pipx install clicker4ai==1.0.0rc3     # a release candidate needs its version
-c4ai config roots add ~/work          # the folders devices may be given
-c4ai serve                            # start the server
-```
-
-To run from a clone instead, see [Development](#development).
-
-`c4ai config roots add` writes `allowed_roots`, the one required setting: the
-ceiling of what any device may reach, never your home directory or anything
-above it (see [Configuration](#configuration)). The server keeps its data
-(config, devices, passkeys, session logs, incognito folders) in
-`~/.clicker4ai`; `C4AI_DATA_DIR` moves it.
-
-Restarting, upgrading or reinstalling keeps all of this: `c4ai serve` picks up
-where it left off. To wipe it, see
-[Uninstall and starting over](#uninstall-and-starting-over).
-
-On start, the server prints its URL, a **one-time pairing code** (valid
-2 minutes, single use), a **pairing link** and a **QR code**. Scan the QR with
-your phone's camera (or open the link, or type the code) to launch the PWA and
-pair the device in one step. A new device reaches no folders until you give it
-some — see [Devices and grants](#devices-and-grants). The server listens on
-**127.0.0.1** only; to reach it from other devices, see
-[Running the server](#running-the-server).
 
 ## Works well with
 
@@ -98,49 +64,96 @@ tree, read the whole diff, commit, open a terminal. Nothing lives on the tablet:
 put it down, pick up the laptop or the phone, and the session and the editor are
 exactly where you left them.
 
-**Or skip the editor.** If you'd rather vibe-code, Clicker4AI alone will do:
-say what you want, and Claude writes the code, runs the tests and, for a
-website or web app, starts a preview you simply check in your browser. You
+**Or skip the editor.** If you don't want to read code and prefer
+"vibe-coding", Clicker4AI alone is enough: say what you want, and Claude
+writes the code, runs the tests and, for a website or web app, starts a
+preview you simply check in your browser. You
 judge the result, not the diff — and when you do want to see a file, Project
 files opens it right in the app.
 
 **One small server is enough.** A modest VPS runs it all: Clicker4AI and your
 projects with their previews (plus code-server, if you want an editor). Put it
-behind a VPN and that one box becomes your whole development and test
+behind a VPN and that one server becomes your whole development and test
 environment, reachable from any device you own.
 
-*Fair warning: this is dangerously addictive. You'll catch yourself shipping
-features from the bus stop, the sofa and the dentist's waiting room. Your
-posture, your sleep and your loved ones may file complaints — take breaks.
-We saw it coming: `c4ai quiet-hours 00:30-08:00` lets the last turn finish
-and then says goodnight, and only the server's CLI can talk it out of that.*
+*A warning: this is hard to put down. You will find yourself adding features
+at the bus stop, on the sofa and in the dentist's waiting room. Your back,
+your sleep and your family will not be happy — take breaks. We expected
+this: `c4ai quiet-hours 00:30-08:00` lets the last turn finish and then says
+goodnight, and only the `c4ai` command on the server can turn it off.*
 
-## Clicker4AI and Claude Code Remote Control
+## Requirements
 
-Claude Code has its own
-[Remote Control](https://code.claude.com/docs/en/remote-control), which
-carries a session over to claude.ai/code or the Claude app. It is official,
-polished and needs no server of your own — if it fits, use it. Clicker4AI
-suits a different setup:
+The computer that will run Clicker4AI needs:
 
-- **Your own network.** Remote Control routes the session through the
-  Anthropic API; here your devices talk only to your own server, over your
-  own network or VPN. What reaches Anthropic is only what the `claude` CLI
-  itself sends.
-- **Any sign-in.** Remote Control needs a claude.ai Pro, Max, Team or
-  Enterprise login; API keys, Amazon Bedrock, Google Cloud and Microsoft
-  Foundry are not supported. Clicker4AI runs whatever `claude` is signed in
-  with (see [Authentication and trademarks](#authentication-and-trademarks)).
-- **Pick the folder on the device.** Remote Control works in the directory
-  where you started `claude` (the server mode can add git worktrees of it);
-  here a device browses the folders you granted it and starts or resumes a
-  session in any of them.
-- **Grants per device.** Each phone, tablet or laptop gets its own folders
-  and, only if you say so, True View (the real Claude Code TUI), project
-  files and upload — set from the server's CLI, all off by default. A
-  passkey unlocks a device after it locks.
-- **Around the session:** project files without spending tokens, an
-  incognito chat, quiet hours, plan usage in the status line.
+- **Linux** (tested on Debian; macOS should work but is untested).
+- **Python 3.13 or newer** (if pipx uses an older one, add
+  `--python python3.13` to `pipx install`).
+- **[pipx](https://pipx.pypa.io)**, or uv (then use `uv tool install` in
+  place of `pipx install`).
+- **Claude Code**, installed and signed in — with a claude.ai account, an
+  API key or a cloud provider (see
+  [Authentication and trademarks](#authentication-and-trademarks)).
+
+## Quickstart
+
+Run the steps below as the user who uses Claude Code (the one signed in),
+not as root: Clicker4AI starts `claude` as that user, with their sign-in and
+their `~/.claude`.
+
+1. Install Clicker4AI, choose its folder and address, and start it:
+
+   ```bash
+   pipx install clicker4ai==1.0.0rc4  # an RC needs its version; takes minutes
+   c4ai config roots add ~/work       # the folder with your projects
+   c4ai config set host 192.168.1.10  # this computer's address
+   c4ai serve --no-pair               # leave it running
+   ```
+
+   - The install downloads about 100 MB and may print nothing for a few
+     minutes; it has not hung. It gives you the `c4ai` command, the CLI
+     this README refers to.
+   - No device can reach anything outside the folder; it may not be your
+     home directory itself or anything above it.
+   - The address is the one your devices can reach (local or VPN); without
+     it the server listens only on `127.0.0.1`, which no other device can
+     reach.
+
+2. In a second terminal, connect (pair) your first device:
+
+   ```bash
+   c4ai pair --no-passkey --all-roots
+   ```
+
+   It prints a code, a link and a QR code, valid once and for 2 minutes.
+   Scan the QR code with the phone's camera and the app opens, already
+   signed in. On a laptop, open the link instead, or type the code on the
+   app's sign-in page.
+
+   - `--all-roots` gives the device the folder from step 1; without it the
+     device gets no folders.
+   - `--no-passkey` lets it in without a passkey (a Face ID or fingerprint
+     login): passkeys work only over https, which this quickstart does not
+     set up.
+
+Plain http is fine on a local network or over a VPN. For a setup reachable
+from the internet, see [Reverse proxy](#reverse-proxy) and
+[Security model](#security-model).
+
+What next:
+
+- **Keep it running** after you log out:
+  [Keeping it running](#keeping-it-running).
+- **More devices** and what each may do:
+  [Devices and grants](#devices-and-grants).
+- **Daily use:** put the server behind https
+  ([Reverse proxy](#reverse-proxy)) and add a passkey in the app
+  (menu → Devices).
+
+Clicker4AI keeps its data (settings, devices, passkeys, session logs,
+incognito chats) in `~/.clicker4ai`; `C4AI_DATA_DIR` moves it. Restarts,
+upgrades and reinstalls keep it. To wipe it:
+[Uninstall and starting over](#uninstall-and-starting-over).
 
 ## Features
 
@@ -148,51 +161,67 @@ suits a different setup:
   plus a directory browser; "New session" spawns a real Claude Code session in
   any working directory, with model and permission-mode choice.
 - **Resume & fork with terminal parity** — open any past session and see its
-  full history backfilled from the transcript; resume keeps the *same* Claude
+  full history loaded from the transcript; resume keeps the *same* Claude
   session id (or fork into a new one) and appends to the same transcript file
   the terminal reads.
+- **Your Claude Code setup** — sessions use your `~/.claude` settings:
+  CLAUDE.md, MCP servers, hooks and custom commands work as in the terminal.
+- **Search past sessions** — *Search* in the menu finds sessions by their
+  name, your prompts and Claude's replies (not tool output), in every
+  project the device may reach, newest first, with the matching line.
+  All words must occur in one paragraph; `"a phrase"`, `?` for one
+  character, `*` for any text within a line and `[nń]` for one of several;
+  words match from their start (`*ile` also finds "file"). Opening a result
+  finds the text in the chat. Every search reads the transcripts afresh —
+  no index is kept.
 - **Structured event stream** — text streamed as deltas, tool-call cards (Bash
   output, Edit diffs, TodoWrite checklists), thinking blocks, compact
   boundaries, and cost/context meters. Not terminal scraping — real structured
   messages from the SDK.
-- **Tap-to-approve permissions** — remote permission prompts park on the server
-  and surface in the app as Allow / Deny (with "always allow" suggestions),
+- **Tap-to-approve permissions** — remote permission prompts wait on the server
+  and show up in the app as Allow / Deny (with "always allow" suggestions),
   plan-mode approval, and AskUserQuestion option buttons.
 - **Commands under `/`** — the `/` button next to the message box lists the
-  app's own commands first (`/btw` for a side question, `/files`, `/compact`,
-  `/rename`, model, permission mode, session info, library; `/clear` last),
-  then the session's Claude Code commands, your own from
-  `~/.claude/commands` included; a filter narrows the list. `/btw`,
-  `/files`, `/compact`, `/clear`, `/model`, `/mode` and `/info` also work
-  typed and sent as a message.
+  app's own commands first (`/btw` for a side question, `/compact`, `/files`,
+  model, permission mode and more), then the session's Claude Code commands,
+  your own from `~/.claude/commands` included; a filter narrows the list.
+  `/btw`, `/files`, `/files-upload`, `/compact`, `/clear`, `/model`, `/mode`,
+  `/info`, `/find` and `/collapse` also work typed and sent as a message.
 - **Live terminal ↔ webapp sync** — turns typed in the terminal `claude` appear
-  in the webapp in real time (transcript tailer); the app's next message
-  silently rotates through resume so both sides share full context on one
-  session id.
+  in the webapp in real time; the app's next message resumes the session, so
+  both sides share the same context on one session id.
 - **Multi-session tabs** — browser-style open-session switcher; jump between
   live sessions, see per-session status, stop a process or rename a session
   without opening it, close individually or all at once (closing a tab asks
-  first and leaves the session running).
+  first and leaves the session running). Pinned tabs stay first and "close
+  all" skips them; projects and a project's past sessions can be pinned to
+  the top too (pins are kept per device).
 - **Plan usage always in sight** — the rate-limit reading the SDK returns with
   every request: "21% (5h) · 82% (7d)" at the end of the chat's status line,
   and per window with its reset time and a bar in session info. The chat
-  only hears of a refusal, naming the limit that ran out and when it resets.
-- **Reconnect with replay** — events are seq-numbered and persisted per session,
-  so backgrounding the app on a phone and coming back replays exactly what
-  was missed.
+  itself mentions limits only when a request is refused: which limit ran
+  out and when it resets.
+- **Reconnect with replay** — events are numbered and saved per session, so
+  when you leave the app on a phone and come back, it replays exactly what
+  you missed.
 - **Incognito chat** — one per device, from Home: a discussion that leaves
-  nothing behind on the server. Web search and fetch only (no files, shell,
-  MCP or True View), seen only by the device that started it, and erased
-  with its transcript when you end it, sign out, or after 24 h without a
-  message.
+  nothing behind on the server once it ends. Web search and fetch only (no
+  files, shell, MCP or True View), seen only by the device that started it,
+  and erased with its transcript when you end it, sign out, or after 24 h
+  without a message.
 - **Library screens** — browse Skills, Slash commands, Agents, and MCP servers
   (global + per-project) read from `~/.claude/*` and `~/.claude.json` /
   `.mcp.json`, with live MCP status from the session init message.
 - **Project files** — browse a project folder without Claude and without
   tokens: text and images open in a viewer, any file downloads, and ↗ on a
-  Read/Edit/Write card opens that file. Upload (one file at a time, up to
-  50 MB, never overwriting) is a separate per-device grant; both are off by
-  default.
+  Read/Edit/Write card opens that file. Upload (several files at once, up
+  to 50 MB each, never overwriting; from the chat with `/files-upload`,
+  straight into a folder of the project) is a separate per-device grant;
+  both are off by default.
+- **Collapsed turns** — `/collapse`, `c` or ⓘ → *Collapse turns* folds every
+  turn but the last two to your prompt and the end of the answer (its last
+  paragraph, and the list before a short closing question); tap one to open
+  it. The setting is remembered on the device.
 - **Physical keyboard** — ↑/↓ (or j/k) and ⏎ through lists, menus and
   sheets, `/` to search, ⌘F to find in a chat, `g h/s/p/t` to jump,
   `1`–`4` / `y` / `n` on approval cards and digits on questions and plans;
@@ -203,9 +232,36 @@ suits a different setup:
 - **Installable PWA** — add to the home screen of a phone or tablet for a
   full-screen, app-like experience with icons and manifest. An open page
   notices when the frontend on the server has changed and offers a one-tap
-  reload, so a restart is not silently invisible. Tested on iOS/iPadOS
+  reload, so you never keep using an old version unaware. Tested on iOS/iPadOS
   Safari and desktop browsers; Android uses the same web APIs but is
   untested.
+
+## Clicker4AI and Claude Code Remote Control
+
+Claude Code has its own
+[Remote Control](https://code.claude.com/docs/en/remote-control), which
+carries a session over to claude.ai/code or the Claude app. It is official
+and needs no server of your own — if it fits, use it. Clicker4AI is for a
+different setup:
+
+- **No service in between.** Remote Control routes the session through
+  the Anthropic API; here your devices connect straight to your server,
+  over a local network or a VPN. What reaches Anthropic is only what the
+  `claude` CLI itself sends.
+- **Any sign-in.** Remote Control needs a claude.ai Pro, Max, Team or
+  Enterprise login; API keys, Amazon Bedrock, Google Cloud and Microsoft
+  Foundry are not supported. Clicker4AI runs whatever `claude` is signed in
+  with (see [Authentication and trademarks](#authentication-and-trademarks)).
+- **Pick the folder on the device.** Remote Control works in the directory
+  where you started `claude` (the server mode can add git worktrees of it);
+  here a device browses the folders you granted it and starts or resumes a
+  session in any of them.
+- **Grants per device.** Each phone, tablet or laptop gets its own folders
+  and, only if you say so, True View (Claude Code's own terminal interface,
+  the TUI), project files and upload — set from the server's CLI, all off by
+  default. A passkey unlocks a device after it locks.
+- **More around the session:** browsing project files without spending
+  tokens, an incognito chat, quiet hours, your plan usage always in view.
 
 ## Running the server
 
@@ -215,37 +271,76 @@ says, and with the defaults for anything it leaves out (`127.0.0.1`, port
 only and are never written anywhere; to keep a setting, store it with
 `c4ai config set` (see [Configuration](#configuration)).
 
-To reach it from other devices, give it the IP address of the interface it
-should listen on (e.g. a LAN or VPN address), or put it behind your own
-reverse proxy / SSH tunnel.
+To reach it from other devices, either let it listen on a LAN or VPN
+address (`--host`), or keep it on `127.0.0.1` behind your own reverse proxy
+(see [Reverse proxy](#reverse-proxy)) or an SSH tunnel. Behind
+a proxy, `--public-url` is the address your devices use: the one-tap login
+link and QR point there (scheme + host[:port] only, no path).
 
 ```bash
 c4ai serve --host 192.168.1.10   # listen on this IP
 c4ai serve --host 0.0.0.0        # all interfaces (see Security)
 c4ai serve --port 9000           # custom port
+c4ai serve --public-url https://rc.example.com   # behind a reverse proxy
 c4ai serve --no-qr               # skip the QR code
 c4ai serve --no-pair             # no pairing code at start (use `pair`)
-c4ai serve --public-url https://rc.example.com   # behind a reverse proxy
-c4ai config set host 192.168.1.10  # the same, kept for every start
+c4ai config set host 192.168.1.10  # --host, kept for every start
 ```
 
-To keep it running, start `c4ai serve --no-pair` under a supervisor of your
-choice (a systemd user unit, pm2) and pair devices with `c4ai pair`.
+### Keeping it running
 
-`--public-url` is the address your devices use (e.g. a TLS reverse proxy such
-as Caddy in front of `127.0.0.1:8780`); the one-tap login link and QR point
-there. Scheme + host[:port] only, no path.
+Start `c4ai serve --no-pair` under a supervisor of your choice (systemd, pm2,
+monit, …) and pair devices with `c4ai pair`.
+
+An example with a systemd user unit. Log in directly as the user who runs
+Claude Code (e.g. over SSH): the commands below will not work if you switch
+from another account with `su -`.
+
+1. Create the unit's folder: `mkdir -p ~/.config/systemd/user`
+2. Save this as `~/.config/systemd/user/clicker4ai.service`:
+
+   ```ini
+   [Unit]
+   Description=Clicker4AI
+   After=network-online.target
+
+   [Service]
+   ExecStart=%h/.local/bin/c4ai serve --no-pair
+   # where `claude` lives (`command -v claude`); systemd's own PATH
+   # leaves out ~/.local/bin
+   Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+   # SIGTERM to the server only; it stops its `claude` processes itself
+   KillMode=mixed
+   Restart=on-failure
+
+   [Install]
+   WantedBy=default.target
+   ```
+
+   Without the `PATH` line the server does not find `claude`: sessions fall
+   back to the copy bundled with the Agent SDK (it may be a different
+   version), True View does not start, and ended incognito chats are not
+   erased from `~/.claude`.
+
+3. Start it now and at every boot:
+   `systemctl --user daemon-reload && systemctl --user enable --now clicker4ai`
+4. Keep it running with nobody logged in: `loginctl enable-linger` (if it
+   is refused, an admin can run `sudo loginctl enable-linger <user>`).
+5. Logs: `journalctl --user -u clicker4ai -f`
+
+### Updates and telemetry
 
 Claude Code processes started by the server get
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (no telemetry, error reporting
 or auto-updater traffic) unless the variable is already set in the
 server's environment.
 
-Keeping the Agent SDK and the `claude` CLI up to date:
+To update the Agent SDK and the `claude` CLI (or in the app: menu → Agent
+SDK, on a device paired with `--manage-devices`; it asks for a passkey):
 
 ```bash
 c4ai sdk                            # Agent SDK vs the claude CLI, newest on PyPI
-c4ai sdk update                     # install it (restart the server afterwards)
+c4ai sdk update                     # install the newest SDK, then restart the server
 c4ai sdk update-cli                 # `claude update` when npm has a newer CLI
 ```
 
@@ -257,12 +352,11 @@ passkeys, which live in files of their own. Only `allowed_roots` is required;
 lists every key with its default (`null` = off). JSON has no comments, so here
 is what each one does:
 
-
 - `allowed_roots` — the folders devices may be given (required; see
   below).
 - `host`, `port` — where the server listens (`127.0.0.1`, `8780`); `--host`
   and `--port` on `c4ai serve` win for that run only.
-- `public_url` — the https address phones use behind a reverse proxy;
+- `public_url` — the https address your devices use behind a reverse proxy;
   `--public-url` wins the same way. Passkeys need it (or `localhost`).
 - `max_runners` — how many sessions may hold a live `claude` process (6;
   see below).
@@ -304,13 +398,12 @@ sessions may hold a live `claude` process at once — each costs roughly 300 MB 
 RAM, so set it from the memory you have. Stopped and detached sessions are free
 and don't count; an open True View terminal is a `claude` process of its own and
 does (opening it on a running chat swaps one process for the other). At the
-limit the server refuses to start another and answers with the sessions you
-could stop, newest-idle last, each with the size of the context it would have to
-rebuild when you return to it **and the model it runs on** — the same context
-costs several times more to rebuild on Opus than on Haiku, so tokens alone would
-mislead; the app offers that list and retries once you pick one. Sessions that
-are working, waiting for your approval, or outside the device's folders are
-never offered.
+limit the server refuses to start another one and lists the sessions you
+could stop, the ones idle longest first. Each shows the size of the context
+it would have to rebuild when you return to it **and the model it runs on**:
+the same context costs several times more to rebuild on Opus than on Haiku.
+Pick one in the app and it tries again. Sessions that are working, waiting
+for your approval, or outside the device's folders are never offered.
 
 Only what is used takes a slot. Resuming a past session shows its history
 (read from the transcript) without starting a process; it starts with the
@@ -320,7 +413,8 @@ first — from any folder, since nothing is lost — before the "stop one" list
 is offered.
 
 `"log_level"` in `~/.clicker4ai/config.json` (read at start) sets what the
-server writes to stderr — under pm2 that is `pm2 logs clicker4ai --err`:
+server writes to stderr — with the systemd unit above that is `journalctl
+--user -u clicker4ai`, under pm2 `pm2 logs <name> --err`:
 
 - `"warning"` (default) — a message `claude` gave no reaction to within
   60 s (also shown in the chat), a process that died or failed to start,
@@ -378,16 +472,17 @@ A device only reaches sessions, projects and files inside its folders. A freshly
 paired device has **none** until you give it some (`--root`, `--all-roots`, or
 `devices set` later) — the same way a passkey login starts empty, so access is
 always a deliberate step. Without `--manage-devices` it sees and signs out only
-itself. `bypassPermissions` and `dontAsk` are never available remotely — use a
-local terminal for those. A folder scope limits the app, not Claude: a session
-may still touch files outside its directory within the permissions you approve.
+itself. `bypassPermissions` and `dontAsk` are never available remotely — use
+`claude` in a terminal on the server for those; `auto` is. A folder scope
+limits the app, not Claude: a session may still touch files outside its
+directory within the permissions you approve.
 
 ## Passkeys
 
 Passkeys are set up from the app (menu → Devices → *Add a passkey*).
 They need an https address, so they work behind a TLS reverse proxy (or on
-`localhost`) and are switched off everywhere else; the pairing code always
-remains.
+`localhost`) and are switched off everywhere else; pairing with a code
+always works.
 
 A device paired with a code, or signed in with a passkey, **must carry a
 passkey**: until it registers one the app shows only *Add a passkey* (the
@@ -395,15 +490,15 @@ server answers everything else with 428, the socket closes with 4428).
 `c4ai pair --no-passkey` skips this for a machine that cannot hold one; the app
 can switch the requirement on (menu → Devices → this device), and only
 `c4ai devices set <id> --no-passkey` switches it off, so a stolen cookie cannot
-shed it. Removing the last passkey of such a device warns first — it then
+remove it. Removing the last passkey of such a device warns first — it then
 has to add a new one before it can do anything else. `pair` warns when the
 server has no https address, since the requirement could never be met.
 
 A device with a passkey is **locked after `lock_idle_minutes`** (in
 `~/.clicker4ai/config.json`, default 15, `0` = never) without a request, and the
-passkey unlocks it. An open app pings every 25 s, so this bites when the app
-is reopened later — or when a stolen cookie is tried. A passkey then does
-three things:
+passkey unlocks it. An open app counts as active (it checks in every 25 s),
+so the lock applies when you come back to the app later — or when someone
+tries a stolen cookie. A passkey does three things:
 
 - **signs you in without a pairing code** — the session it creates is
   *empty*: no folders, no True View, no device management. A passkey proves
@@ -414,12 +509,17 @@ three things:
 - **confirms risky actions** — on a device that has a passkey, opening True
   View, choosing "Always" on a permission card and signing out another device
   ask for Face ID / Touch ID first. One confirmation counts for 5 minutes.
+  Actions that reach the whole server — updating the Agent SDK or the
+  `claude` CLI and restarting the server — ask for one on every device, also
+  one without a passkey of its own (a key synced to it from another device
+  works). A device without one holds only a cookie, the weakest login there
+  is. With no key registered on the server they stay CLI-only.
 - **wakes a locked session** — the menu offers *lock* next to *sign out*.
   Locking keeps the cookie and the device's folders, and refuses every request
   until a passkey unlocks it, so getting back in needs the cookie *and* you.
   Signing out still removes the device for good. A locked session does not slide
   its 30-day idle expiry, and `c4ai devices lock|unlock <id>` does the same from
-  the CLI — handy for a phone you have mislaid. If the passkey itself is gone
+  the CLI — handy for a lost phone. If the passkey itself is gone
   (deleted from the keychain), `c4ai passkeys remove <passkey-id>` and
   `c4ai devices unlock <id>` on the server let the device add a new one and keep
   its folders; the lock screen says so.
@@ -453,7 +553,7 @@ c4ai passkeys rename <passkey-id> "Shared key"   # the label, not the keychain
 
 Quiet hours (`quiet-hours`, stored as `"quiet_hours"` in
 `~/.clicker4ai/config.json`, may cross midnight) stop every device from
-starting a new turn inside the window. The window is in the host's local time
+starting a new turn inside the window. The window is in the server's local time
 unless `--tz` names a zone (`"quiet_tz"`, e.g. `Europe/London`, which follows
 summer time); never in the device's zone, which a phone could change to shift
 the window. A turn already running
@@ -463,35 +563,51 @@ works, as a last step while the cache is warm. In True View a hook added to the
 `claude` it starts refuses the prompt the same way, judged by the device that
 typed last. Changes apply without a restart. Only the CLI sets the window or
 exempts a device (`c4ai devices set <id> --quiet-exempt`) — the app cannot, so
-a phone at 1 a.m. cannot either. A terminal on the host itself is not affected.
+a phone at 1 a.m. cannot either. A terminal on the server itself is not
+affected.
 
 ```bash
 c4ai quiet-hours 00:30-08:00        # no new prompts at night (`off` removes it)
-c4ai quiet-hours --tz Europe/London # window in this zone, not host time
+c4ai quiet-hours --tz Europe/London # window in this zone, not the server's
 ```
 
 ## Project files
 
-Project files (`--files` on `c4ai pair` or `c4ai devices set <id>`) add
-*Files* to a project screen, to a session's ⋯ menu (session list and Tabs) and
-to the chat as `/files` (pick it from the list under the `/` button next to
-the message box, or type `/files` and send it): a plain list of the folder,
-with no Claude and no tokens involved. Tap a file to see it — text as plain text (the first 1 MB),
-images whole on the screen and never above 1:1 with its pixels (a tap shows 1:1)
-— or download it (with a keyboard: ↑ ↓ scroll, ← → the next file, `d` downloads,
-⏎ closes; back closes just the viewer). *Find* (`/`, ⌘F or Ctrl+F) searches
-a text file: matches are highlighted, ⏎ and ⇧⏎ (or ↓ ↑) go from one to the
-next, esc closes the search. In the chat, ↗ on a Read, Edit or Write
-card opens that file the same way. From a session it opens in the session's
-folder; "‹ up" goes on above it as far as the device's folders reach.
-Hidden files are listed; `.git`,
-`node_modules` and `.venv` are not, and nothing is served through them. The
-reach is the device's folders, minus this server's data and `~/.claude`, as
-everywhere else. Nothing from a project runs on the app's origin: images come
-with `Content-Security-Policy: sandbox` and `nosniff`, every other file only as
-a download. `--files-upload` also lets the device upload one file at a time (up
-to 50 MB) into the folder on screen; an existing name is never overwritten — the
-app asks for another one or cancels.
+A plain view of a project's folder, with no Claude and no tokens involved.
+Two per-device grants, both off by default: `--files` (browse and download)
+and `--files-upload` (upload too), on `c4ai pair` or `c4ai devices set <id>`.
+
+Where it opens:
+
+- *Files* on a project's screen, below "Start new session";
+- *Files* in a session's ⋯ menu (on Home, Sessions and Tabs);
+- `/files` in the chat (from the `/` list next to the message box, or typed
+  and sent);
+- ↗ on a Read, Edit or Write card in the chat opens that file.
+
+From a session it starts in the session's folder; "‹ up" goes on above it as
+far as the device's folders reach.
+
+Viewing a file:
+
+- text as plain text (the first 1 MB); *Find* (`/`, ⌘F or Ctrl+F)
+  highlights the matches, ⏎ and ⇧⏎ (or ↓ ↑) go from one to the next, Esc
+  closes the search;
+- images whole on the screen, never above 1:1 with their pixels (a tap shows
+  1:1);
+- any file can be downloaded;
+- with a keyboard: ↑ ↓ scroll, ← → the next file, `d` downloads, ⏎ closes;
+  back closes just the viewer.
+
+Uploading (only devices with the `--files-upload` grant): several files at
+once, up to 50 MB each, into the folder on screen, or straight from the chat
+with `/files-upload`. An existing name is never overwritten: the app asks for
+another one or cancels.
+
+What it shows: everything in the device's folders, hidden files too (except
+`.git`, `node_modules`, `.venv`, this server's data and `~/.claude`). Nothing
+from a project runs in the app: images are only displayed, every other file
+is only downloaded.
 
 ## True View
 
@@ -499,8 +615,9 @@ True View (the `>_` button in a chat) streams the real Claude Code TUI.
 It is off unless the device was paired with `--terminal`. In the chat every
 tool call goes through Claude and your approval card in the app; in True
 View `!command` runs shell commands directly and `/permissions` can add
-allow rules, so it is effectively a shell with your user's rights —
-regardless of `--root`, which only decides which sessions it can open.
+allow rules, so it is effectively a shell with the rights of the user
+running the server — regardless of `--root`, which only decides which
+sessions it can open.
 It opens in a new session too, before the chat's first message: the TUI
 then starts the Claude session under an id the server gives it, and the
 chat continues that conversation. Closed with nothing typed, it leaves no
@@ -511,13 +628,15 @@ send it with ⏎ there) or, if you choose, closes the terminal and goes to
 the chat; `/clear`, `/compact` and stopping the session warn that they close
 it too.
 
-## Reverse proxy (Caddy)
+## Reverse proxy
 
-Recommended setup: Caddy on the same host terminates TLS and proxies to
-`127.0.0.1:8780`; your devices reach Caddy over a VPN. Store the address
-with `c4ai config set public_url https://rc.example.com` so pairing links
-point there and the session cookie becomes `Secure` + `__Host-` prefixed.
-`--public-url` does the same for one run only.
+Recommended setup: a proxy on the same host (Caddy or nginx) terminates TLS
+and proxies to `127.0.0.1:8780`; your devices reach it over a VPN. Store the
+address with `c4ai config set public_url https://rc.example.com` so pairing
+links point there and the session cookie becomes `Secure` + `__Host-`
+prefixed. `--public-url` does the same for one run only.
+
+### Caddy
 
 ```caddyfile
 rc.example.com {
@@ -541,32 +660,23 @@ rc.example.com {
 }
 ```
 
-- **TLS**: use your existing (wildcard) certificate setup for the site block.
-- **`remote_ip` and NAT**: `remote_ip` matches the TCP peer. If the VPN
-  gateway NATs VPN clients, every VPN request arrives with the *gateway's*
-  address (and so may LAN traffic routed through it), which makes the filter
-  much weaker. Check the Caddy access log (`log` directive, field
-  `request.remote_ip`) while connected over the VPN and set the matcher to
-  what you actually see; prefer a routed (non-NAT) VPN subnet.
-- **CSP**: `'unsafe-inline'` for styles is needed because the UI and xterm.js
-  set inline `style` attributes; scripts stay `'self'` only.
-- **Optional mTLS**: require a client certificate on top of the device
-  session (Caddy ≥ 2.8 syntax):
+**Optional mTLS**: require a client certificate on top of the device session
+(Caddy ≥ 2.8 syntax):
 
-  ```caddyfile
-  tls {
-  	client_auth {
-  		mode require_and_verify
-  		trust_pool file /etc/caddy/rc-client-ca.pem
-  	}
-  }
-  ```
+```caddyfile
+tls {
+	client_auth {
+		mode require_and_verify
+		trust_pool file /etc/caddy/rc-client-ca.pem
+	}
+}
+```
 
-  Install the client certificate on each device (on iOS/iPadOS as a profile).
-  Test the home-screen PWA as well as Safari — client-certificate prompts in
-  standalone web apps have been unreliable on iOS.
+Install the client certificate on each device (on iOS/iPadOS as a profile).
+Test the home-screen PWA as well as Safari — client-certificate prompts in
+standalone web apps have been unreliable on iOS.
 
-## Reverse proxy (nginx)
+### nginx
 
 The same setup with nginx. Unlike Caddy it needs to be told three things:
 keep the `Host` header (nginx sends `127.0.0.1:8780` otherwise, and the
@@ -586,7 +696,7 @@ server {
     ssl_certificate     /etc/ssl/rc.example.com/fullchain.pem;
     ssl_certificate_key /etc/ssl/rc.example.com/privkey.pem;
 
-    # Only VPN clients may reach the app (the NAT note above applies).
+    # Only VPN clients may reach the app (see the NAT note below).
     allow 10.8.0.0/24;
     deny  all;
 
@@ -609,16 +719,18 @@ server {
 }
 ```
 
-The TLS, `remote_ip`/NAT and CSP notes for Caddy apply here too; `allow`
-matches the TCP peer just as `remote_ip` does.
+### Notes for both
 
-## Requirements
-
-- **Linux** (any POSIX system with `pty`/`termios` should work).
-- **Python ≥ 3.13**.
-- **Claude Code CLI** installed and authenticated (`claude` on your PATH,
-  already logged in). Sessions load your real `~/.claude` config — CLAUDE.md,
-  MCP servers, hooks, and custom commands all apply, exactly as in the terminal.
+- **TLS**: any certificate your devices trust (e.g. Let's Encrypt).
+- **`remote_ip` and NAT**: `remote_ip` (and nginx's `allow`) matches the TCP
+  peer. If the VPN gateway NATs VPN clients, every VPN request arrives with the
+  *gateway's* address (and so may LAN traffic routed through it), which makes
+  the filter much weaker. Check the Caddy access log (`log` directive, field
+  `request.remote_ip`; in nginx `$remote_addr`) while connected over the VPN and
+  set the matcher to what you actually see; prefer a routed (non-NAT) VPN
+  subnet.
+- **CSP**: `'unsafe-inline'` for styles is needed because the UI and xterm.js
+  set inline `style` attributes; scripts stay `'self'` only.
 
 ## Uninstall and starting over
 
@@ -673,7 +785,10 @@ accordingly:
   project files (`--files`, `--files-upload`). A new device, however it signed
   in, reaches nothing until the CLI says otherwise. `allowed_roots` itself may
   not be the home directory or above, so no grant can reach `~/.ssh` or
-  `~/.claude.json`.
+  `~/.claude.json` unless you make a folder inside them a root yourself.
+- **Project files never run on the app's origin.** Images come with
+  `Content-Security-Policy: sandbox` and `nosniff`, every other file only as
+  a download; nothing is served from `.git`, `node_modules` or `.venv`.
 - **Passkeys (WebAuthn), where https allows them.** Registered from a signed-in
   device, stored as public keys only, bound to the RP ID of your `public_url`. A
   credential carries **no grants**: signing in with one creates a device with no
@@ -681,7 +796,7 @@ accordingly:
   They add a login path, and a step-up confirmation (user verification required,
   5 minutes) in front of "always allow" and signing out another device, and
   every time True View starts a new terminal (joining one that already runs asks
-  nothing) — so an unlocked, stolen phone is not enough. Challenges are
+  nothing) — so these need you, not just an unlocked phone. Challenges are
   single-use and held in memory only. A revoked device's passkeys are deleted
   with it.
 - **Incognito chats are confined, not just hidden.** Their session has only
@@ -712,19 +827,25 @@ accordingly:
   c4ai trust add ~/work/web/site      # as "Trust and continue" in the app
   c4ai trust remove ~/work/web/site   # take the app's trust back
   ```
-- **No unattended modes remotely:** `bypassPermissions` and `dontAsk` can't
-  be selected from the app; every tool call in the chat goes through your
-  approval.
+- **Permission modes remotely:** `default`, `acceptEdits`, `plan` and
+  `auto` (Claude Code's classifier approves instead of you and asks again
+  after repeated blocks; not on Haiku, where the session says so and runs
+  in `default`). `bypassPermissions` and `dontAsk` can't be selected from
+  the app. True View starts in the session's mode, `default` included.
 - **Hardening:** failed logins throttled (10/min → 429), state-changing `/api/`
   requests must be `application/json` (CSRF), WebSocket Origin allowlist,
   validated model/mode/session ids, `~/.clicker4ai` 0700 with 0600 files
   (looser modes are put back, with a warning on stderr), out of every
   device's reach (as is `~/.claude`) even under an allowed root.
 - **The server binds `127.0.0.1` by default.** Expose it through a TLS reverse
-  proxy restricted to your VPN (see [Reverse proxy](#reverse-proxy-caddy)).
-  **Do not port-forward it to the public internet.**
-- **No outbound traffic from the server itself.** The `claude` processes it
-  starts talk to the Anthropic API only, with
+  proxy restricted to your VPN (see [Reverse proxy](#reverse-proxy)).
+  **Do not port-forward the server itself;** if it must face the internet,
+  put it behind an https proxy and keep passkeys required — a VPN is safer
+  still.
+- **No outbound traffic from the server itself, except the update check.**
+  Once a day it asks PyPI and npm for the newest Agent SDK and `claude` CLI
+  (a plain download of their version lists; nothing about you is sent).
+  The `claude` processes it starts talk to the Anthropic API only, with
   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (no telemetry/auto-update).
 - **Nothing sensitive is in the repository.** Devices, codes, config and
   session logs live in `~/.clicker4ai`, outside the checkout.
@@ -789,6 +910,7 @@ python3 -m venv .venv                     # create the venv
 .venv/bin/pip install httpx               # dev dependency of the test scripts
 .venv/bin/python scripts/smoke_api.py     # REST smoke suite
 .venv/bin/python scripts/passkey_test.py  # WebAuthn register/login/step-up (software authenticator)
+.venv/bin/python scripts/search_test.py   # past-session search on made-up transcripts
 .venv/bin/python scripts/e2e_live.py      # live end-to-end (text / Bash / compact / resume / sync / hooks)
 node scripts/kbd_test.js <pairing code>   # keyboard shortcuts (Playwright; test server on 8781)
 ```
@@ -799,6 +921,18 @@ status feedback).
 
 ## Changes
 
+### 1.0.0rc4 (2026-09-30)
+
+- Search past sessions.
+- Pinning of sessions and projects.
+- Auto permission mode from the app.
+- Upload several files straight from the chat (`/files-upload`).
+- Collapsed turns (`/collapse`).
+- One button updates both the Agent SDK and the claude CLI.
+- A copy button (⧉) on every code block in the chat.
+- Fix: the top bar is no longer blurred in the iPad home-screen app
+  (iPadOS 27).
+
 ### 1.0.0rc3 (2026-09-28)
 
 - Licence notices in the app, as AGPL-3.0 requires, and the link to the
@@ -806,20 +940,16 @@ status feedback).
 - A stopped session shows its context size in the chat header and the info
   sheet, read from its transcript.
 - A session's last-activity time is green while its prompt cache is likely
-  still warm (under an hour), in the session list, on Home, in Tabs and in a
-  project's past sessions.
-- The menu lists Sessions and Projects right after Home; the Tabs button is
-  last in the chat and True View top bar, as on the other screens.
+  still warm (under an hour).
 - A tab waiting for an approval now pulses in Tabs and among its project's
-  sessions too, not only in the session list.
+  sessions too.
 - Find in the chat: ⌘F (or `/find`) searches your messages and Claude's
   replies, newest match first.
 
 ### 1.0.0rc2 (2026-09-27)
 
 - The "/" command list scrolls on a phone again (so do the folder browser and
-  a past session's preview); `/btw`, `/files`, `/compact` and `/rename` come
-  first, `/clear` last.
+  a past session's preview).
 - Chat ↔ True View: "chat" in True View's header shows the chat while the
   terminal keeps running; a message sent from the chat meanwhile can be pasted
   into True View instead of closing it; stop, `/clear` and `/compact` warn

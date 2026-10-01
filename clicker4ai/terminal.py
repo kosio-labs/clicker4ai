@@ -282,6 +282,7 @@ def claude_argv(resume_id: str, model: str, mode: str, sid: str,
             "--settings", quiet_settings(sid)]
     if model and model != "default":
         argv += ["--model", model]
-    if mode and mode != "default":
-        argv += ["--permission-mode", mode]
+    # always named: without the flag an interactive claude (2.1.283+) starts
+    # in auto, while the app would show "default"
+    argv += ["--permission-mode", mode or "default"]
     return argv
