@@ -936,6 +936,28 @@ status feedback).
 
 ## Changes
 
+Coming in 1.1.0: the app in German, Spanish, French, Italian and Polish;
+MCP tools and auto mode in incognito chats; a tab pulses when a turn ends
+with a question to you.
+
+### 1.0.0 (not released yet)
+
+- Fix: back from a sleeping phone, a locked app shows the lock screen at
+  once instead of swallowing the first tap.
+- Fix: a running turn can be stopped while the message box has text (■
+  next to ↑), and with Esc or ⌘. from a keyboard (the iPad's has no Esc).
+- Fix: no *Check now* button while an update installs (the page refreshes
+  itself).
+- Fix: Claude puts answers in the visible reply, not only in thinking,
+  which the app shows collapsed.
+- `/upload` works typed, like `/files-upload`.
+- Fix: a message sent after the computer slept with the app open no longer
+  vanishes; it goes out on a fresh connection or back into the box.
+- When Claude Code on the host is logged out, the chat says so and offers
+  True View with /login typed in; /login in the chat does the same.
+- Fix: on an iPad with a keyboard, typing in a chat no longer stops at
+  random (the message box takes the caret only from a tap).
+
 ### 1.0.0rc4 (2026-09-30)
 
 - Search past sessions.
