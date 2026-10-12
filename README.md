@@ -76,6 +76,11 @@ projects with their previews (plus code-server, if you want an editor). Put it
 behind a VPN and that one server becomes your whole development and test
 environment, reachable from any device you own.
 
+**Or just run it on your own Linux or macOS workstation.** No VPS and no
+proxy needed: connect your devices to it over Tailscale or any other VPN,
+and your phone reaches it from anywhere (see
+[Your own computer with Tailscale](#your-own-computer-with-tailscale)).
+
 *A warning: this is hard to put down. You will find yourself adding features
 at the bus stop, on the sofa and in the dentist's waiting room. Your back,
 your sleep and your family will not be happy — take breaks. We expected
@@ -185,8 +190,9 @@ upgrades and reinstalls keep it. To wipe it:
   app's own commands first (`/btw` for a side question, `/compact`, `/files`,
   model, permission mode and more), then the session's Claude Code commands,
   your own from `~/.claude/commands` included; a filter narrows the list.
-  `/btw`, `/files`, `/files-upload`, `/compact`, `/clear`, `/model`, `/mode`,
-  `/info`, `/find` and `/collapse` also work typed and sent as a message.
+  `/btw`, `/files`, `/files-upload` (or `/upload`), `/compact`, `/clear`,
+  `/model`, `/mode`, `/info`, `/find` and `/collapse` also work typed and
+  sent as a message.
 - **Live terminal ↔ webapp sync** — turns typed in the terminal `claude` appear
   in the webapp in real time; the app's next message resumes the session, so
   both sides share the same context on one session id.
@@ -226,6 +232,9 @@ upgrades and reinstalls keep it. To wipe it:
   sheets, `/` to search, ⌘F to find in a chat, `g h/s/p/t` to jump,
   `1`–`4` / `y` / `n` on approval cards and digits on questions and plans;
   `?` lists everything.
+  In a chat every character goes into the message box, wherever you
+  clicked; Esc (⌘. on an iPad) first turns the keys into shortcuts until
+  the next click or tap (note: while a turn runs, the first Esc stops it).
   With a mouse or trackpad (also an iPad's trackpad keyboard) ⏎ sends the
   message and ⇧⏎ starts a new line, and key hints show; on a phone ⏎ is a
   new line and the ↑ button sends.
@@ -273,7 +282,9 @@ only and are never written anywhere; to keep a setting, store it with
 
 To reach it from other devices, either let it listen on a LAN or VPN
 address (`--host`), or keep it on `127.0.0.1` behind your own reverse proxy
-(see [Reverse proxy](#reverse-proxy)) or an SSH tunnel. Behind
+(see [Reverse proxy](#reverse-proxy)) or an SSH tunnel. On your own
+computer, Tailscale does both without a proxy (see
+[Your own computer with Tailscale](#your-own-computer-with-tailscale)). Behind
 a proxy, `--public-url` is the address your devices use: the one-tap login
 link and QR point there (scheme + host[:port] only, no path).
 
@@ -643,6 +654,57 @@ send it with ⏎ there) or, if you choose, closes the terminal and goes to
 the chat; `/clear`, `/compact` and stopping the session warn that they close
 it too.
 
+## Your own computer with Tailscale
+
+No VPS needed: Clicker4AI can run on your own Linux or macOS machine, and
+[Tailscale](https://tailscale.com) (a WireGuard VPN with a free personal
+plan) lets your phone and tablet reach it from anywhere. There is no port
+forwarding or routing to set up: install Tailscale on the computer and on
+each device, sign in to the same account, and every one of them gets a
+`100.x.y.z` address that the others can reach. Traffic between them is
+encrypted by WireGuard. The computer has to stay on and awake while you use
+it.
+
+**Plain http, no passkeys.** Let Clicker4AI listen on the computer's
+Tailscale address and follow the [Quickstart](#quickstart) with it:
+
+```bash
+tailscale ip -4                       # e.g. 100.101.102.103
+c4ai config set host 100.101.102.103
+c4ai serve --no-pair
+c4ai pair --no-passkey --all-roots    # in a second terminal
+```
+
+The address exists only while Tailscale is up; if Clicker4AI starts at boot
+before it, it cannot listen there. Start it after Tailscale, or listen on
+`0.0.0.0` and firewall the port (see [Security model](#security-model)).
+
+**https with passkeys, still no proxy.** `tailscale serve` gives the
+computer an https address with a real certificate,
+`https://<machine>.<tailnet>.ts.net`, and passes requests to a local port,
+reachable only from your tailnet. Keep Clicker4AI on `127.0.0.1` (the
+default) and point the public URL there:
+
+```bash
+tailscale serve --bg 8780             # https://<machine>.<tailnet>.ts.net
+c4ai config set public_url https://<machine>.<tailnet>.ts.net
+c4ai serve --no-pair
+c4ai pair --all-roots                 # the device adds a passkey first
+```
+
+- `tailscale serve` needs HTTPS certificates switched on for your tailnet
+  (admin console → DNS → HTTPS Certificates) and MagicDNS, which new
+  tailnets have on by default.
+- The machine name becomes public: certificates are logged in Certificate
+  Transparency. Rename the machine first if its name says too much.
+- `--bg` keeps serving after a reboot; `tailscale serve status` shows it,
+  `tailscale serve reset` removes it.
+- Serve keeps the original `Host` header and passes WebSockets, which the
+  app's Origin check and live connection need.
+
+See Tailscale's [Serve](https://tailscale.com/kb/1312/serve) and
+[HTTPS](https://tailscale.com/kb/1153/enabling-https) pages for details.
+
 ## Reverse proxy
 
 Recommended setup: a proxy on the same host (Caddy or nginx) terminates TLS
@@ -938,7 +1000,7 @@ status feedback).
 
 Coming in 1.1.0: the app in German, Spanish, French, Italian and Polish;
 MCP tools and auto mode in incognito chats; a tab pulses when a turn ends
-with a question to you.
+with a question to you; Markdown files open rendered in the file viewer.
 
 ### 1.0.0 (not released yet)
 
@@ -946,17 +1008,21 @@ with a question to you.
   once instead of swallowing the first tap.
 - Fix: a running turn can be stopped while the message box has text (■
   next to ↑), and with Esc or ⌘. from a keyboard (the iPad's has no Esc).
+- Fix: a quick second ⏎ or tap on ↑ after sending no longer stops the reply.
 - Fix: no *Check now* button while an update installs (the page refreshes
   itself).
 - Fix: Claude puts answers in the visible reply, not only in thinking,
   which the app shows collapsed.
 - `/upload` works typed, like `/files-upload`.
 - Fix: a message sent after the computer slept with the app open no longer
-  vanishes; it goes out on a fresh connection or back into the box.
+  vanishes; it goes out on a fresh connection or back into the box. Back
+  from the background, the app reconnects by itself.
 - When Claude Code on the host is logged out, the chat says so and offers
   True View with /login typed in; /login in the chat does the same.
 - Fix: on an iPad with a keyboard, typing in a chat no longer stops at
-  random (the message box takes the caret only from a tap).
+  random, also back from another app: a key typed outside the message box
+  goes into it; Esc (⌘. on an iPad) first turns the keys into shortcuts
+  until the next click.
 
 ### 1.0.0rc4 (2026-09-30)
 
