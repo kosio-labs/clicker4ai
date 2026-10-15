@@ -208,6 +208,7 @@ const ok = (c, m) => { console.log((c ? "PASS " : "FAIL ") + m); if (!c) fails++
     wsSend = (o) => { if (o.type === "compact") { logSend(JSON.stringify(o)); return true; } return orig(o); }; });
   const compacts = () => sent.filter((s) => JSON.parse(s).type === "compact").length;
   await p.evaluate(() => palette("kbdtest"));
+  await p.waitForTimeout(450);   // PALETTE_GRACE: earlier clicks are dropped
   await p.locator("#sheet-root .sheet-item", { hasText: "/compact" }).click();
   await p.waitForTimeout(300);
   ok(compacts() === 0 && await p.evaluate(() => document.querySelector("#sheet-root").textContent.includes("Compact conversation?")),

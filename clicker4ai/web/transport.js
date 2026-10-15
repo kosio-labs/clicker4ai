@@ -9,6 +9,10 @@
 "use strict";
 
 const RPC_TIMEOUT_MS = 30000;
+// Pings go out every 25 s and each gets a pong: a minute with nothing from
+// the server means the socket died without telling us (a computer that
+// slept with the app on screen wakes up to one that still reads as open).
+const STALE_MS = 60000;
 
 class LocalTransport {
   constructor() {
@@ -21,19 +25,45 @@ class LocalTransport {
     this._sendQueue = [];      // frames waiting for the socket to open
     this._nextId = 1;
     this._retryTimer = null;
+    this._lastRx = 0;          // when the server last said anything
+    this._halted = false;      // closed on purpose (logged out, locked …): no retry
+    this._openedAt = 0;        // when the current socket started connecting
+    this._pingTimer = null;
+  }
+
+  // Started by connect() and stopped by close(): a transport closed for the
+  // lock screen gets its pings back once unlocking connects it again.
+  _startPing() {
+    if (this._pingTimer) return;
     this._pingTimer = setInterval(() => {
-      if (this.ws && this.ws.readyState === 1) this.ws.send('{"type":"ping"}');
+      if (!this.ws) return;
+      // iOS can close a frozen page's socket without ever firing onclose:
+      // nothing would retry until the next send, so the timer does
+      if (!document.hidden && !this._halted) {
+        if (this.ws.readyState > 1) { this.connect(); return; }
+        if (this.ws.readyState === 0 && Date.now() - this._openedAt > 30000) {
+          this.reconnect(); return;
+        }
+      }
+      if (this.ws.readyState !== 1) return;
+      // a hidden page's timers are throttled, so silence proves nothing there
+      if (!document.hidden && this._stale()) { this.reconnect(); return; }
+      this.ws.send('{"type":"ping"}');
     }, 25000);
   }
 
   connect() {
     if (this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1)) return;
+    this._startPing();
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
     this.ws = ws;
+    this._halted = false;
+    this._openedAt = Date.now();
 
     ws.onopen = () => {
       this.up = true;
+      this._lastRx = Date.now();
       this._retry = 0;
       const q = this._sendQueue;
       this._sendQueue = [];
@@ -41,6 +71,7 @@ class LocalTransport {
       this._emitStatus({ up: true });
     };
     ws.onmessage = (e) => {
+      this._lastRx = Date.now();
       let msg; try { msg = JSON.parse(e.data); } catch { return; }
       if (msg.type === "rpc_result") { this._settle(msg); return; }
       for (const cb of this._msgCbs) cb(msg);
@@ -51,18 +82,22 @@ class LocalTransport {
       this._failPending(new Error(e.code === 4401 ? "unauthorized"
         : e.code === 4503 ? "server error" : "connection lost"));
       if (e.code === 4401) {
+        this._halted = true;
         this._emitStatus({ up: false, authRequired: true });
         return;
       }
       if (e.code === 4423) {          // cookie fine, session locked
+        this._halted = true;
         this._emitStatus({ up: false, locked: true });
         return;
       }
       if (e.code === 4428) {          // device must register a passkey first
+        this._halted = true;
         this._emitStatus({ up: false, passkeyRequired: true });
         return;
       }
       if (e.code === 4403) {          // Origin refused: retrying cannot help
+        this._halted = true;
         this._emitStatus({ up: false, badOrigin: true });
         return;
       }
@@ -76,9 +111,39 @@ class LocalTransport {
     ws.onerror = () => ws.close();
   }
 
+  // A page the OS froze (iOS, screen off) can wake up with a socket that
+  // still reads as open but is dead — connect() would keep it. Drop it
+  // and open a fresh one; a locked session then closes with 4423 at once.
+  reconnect() {
+    const ws = this.ws;
+    this.ws = null;
+    this.up = false;
+    if (ws) {
+      ws.onopen = null; ws.onclose = null; ws.onmessage = null; ws.onerror = null;
+      try { ws.close(); } catch {}
+    }
+    this._failPending(new Error("connection lost"));
+    clearTimeout(this._retryTimer);
+    this.connect();
+  }
+
+  _stale() { return Date.now() - this._lastRx > STALE_MS; }
+
   send(obj) {
+    const frame = JSON.stringify(obj);
     if (this.ws && this.ws.readyState === 1) {
-      this.ws.send(JSON.stringify(obj));
+      if (this._stale()) {
+        // a fresh socket first; the frame waits for it (dropped, and
+        // reported down, if that one does not open)
+        this.reconnect();
+        this._sendQueue.push(frame);
+      } else this.ws.send(frame);
+      return true;
+    }
+    // a socket on its way up (reconnect() on the way back to the app) takes
+    // the frame when it opens, as rpc() does; dropped if it never opens
+    if (this.ws && this.ws.readyState === 0) {
+      this._sendQueue.push(frame);
       return true;
     }
     this.connect();
@@ -96,6 +161,7 @@ class LocalTransport {
         if (i >= 0) this._sendQueue.splice(i, 1);
         reject(new Error("rpc timeout: " + method));
       }, RPC_TIMEOUT_MS);
+      if (this.ws && this.ws.readyState === 1 && this._stale()) this.reconnect();
       this._pending.set(id, { resolve, reject, timer });
       if (this.ws && this.ws.readyState === 1) this.ws.send(frame);
       else { this._sendQueue.push(frame); this.connect(); }
@@ -131,6 +197,7 @@ class LocalTransport {
   close() {
     clearTimeout(this._retryTimer);
     clearInterval(this._pingTimer);
+    this._pingTimer = null;
     const ws = this.ws;
     this.ws = null;
     this.up = false;

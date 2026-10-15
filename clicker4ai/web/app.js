@@ -461,6 +461,7 @@ function wsSend(obj) {
 function onTransportStatus(st) {
   S.wsUp = !!st.up;
   updateConnUI();
+  if (!st.up) restoreUnacked();
   if (st.locked) { showLock(); return; }
   if (st.passkeyRequired) { showPasskeyGate(); return; }
   if (st.authRequired) { S.authed = false; nav({ name: "login" }); return; }
@@ -485,8 +486,34 @@ function onTransportStatus(st) {
   }
 }
 
+// Back after a longer absence the page may have been frozen past the idle
+// lock: reconnect at once so the lock screen shows before the next tap,
+// instead of swallowing whatever that tap was.
+let hiddenAt = 0;
+// In a chat every character goes into the message box (typeIntoChat);
+// Esc there switches to the shortcuts until the next click or tap.
+let shortcutsIn = null;   // sid of the chat in shortcut mode
+let fitViewport = null;   // the iOS keyboard fit, set below
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && S.authed && T) T.connect();
+  if (document.hidden) {
+    hiddenAt = Date.now();
+    // iPadOS gives a field focused when the app went away the focus back,
+    // but only sometimes its keyboard session: the caret blinks and keys go
+    // nowhere. So the field lets go now, and back in a chat the first key
+    // focuses the message box during the key press (typeIntoChat).
+    shortcutsIn = null;
+    if (APPLE_TOUCH && isTyping(document.activeElement)) {
+      document.activeElement.blur();
+    }
+    return;
+  }
+  // iOS sends no viewport event on the way back, so #app may keep the
+  // keyboard's old fit (caret drawn a line off, taps landing beside ☰)
+  if (fitViewport) { fitViewport(); setTimeout(fitViewport, 400); }
+  const away = hiddenAt ? Date.now() - hiddenAt : 0;
+  hiddenAt = 0;
+  if (!S.authed || !T) return;
+  if (away > 20000) T.reconnect(); else T.connect();
 });
 
 // The page keeps running the app.js it loaded, so a server restart or a
@@ -1134,8 +1161,10 @@ async function renderSdk(check) {
     st.restart_when_idle ? el("div", { class: "empty" },
       "The server restarts once no session is in a turn and no True View is open.") : null,
     progress,
+    // no "Check now" while installing: the page refreshes itself every 2 s
     el("div", { class: "a-buttons" }, ...actions,
-      el("button", { class: "btn", onclick: () => renderSdk(true) }, "Check now")),
+      st.installing || st.cli_updating ? null
+        : el("button", { class: "btn", onclick: () => renderSdk(true) }, "Check now")),
     el("div", { class: "empty" }, "Same from the server: ", el("code", null, "c4ai sdk [update|update-cli]"), ".")));
 }
 
@@ -1933,6 +1962,14 @@ function renderSessions() {
       el("div", { class: "quiet" }, "Your id is in menu → Devices.")));
   }
 
+  // the list holds only the sessions this server knows; one used only in a
+  // terminal is under its project, and opening it there adds it here
+  if (S.hasRoots) {
+    wrap.append(el("div", { class: "list-note" },
+      "Sessions used only in a terminal are not listed here; open them from their project in ",
+      el("span", { class: "link", role: "button", onclick: () => nav({ name: "projects" }) }, "Projects"), "."));
+  }
+
   const sorted = sortedSessions();
   const live = sorted.filter((s) => s.live || ["working", "awaiting", "starting", "compacting"].includes(s.state));
   const rest = sorted.filter((s) => !live.includes(s));
@@ -2070,14 +2107,14 @@ function shortModel(m) {
 }
 
 // Stop the session's claude process (it resumes on the next message); when
-// stopped from inside the chat, return to the session list. The tab stays.
+// stopped from inside the chat, return to the home screen. The tab stays.
 // A running True View stops with it, so that is confirmed first; after()
 // runs once the process is stopped.
 async function stopSession(sid, after) {
   const stop = async () => {
     await T.rpc("sessions.stop", { sid });
     toast("Stopped");
-    if (S.view?.name === "chat" && S.view.sid === sid) nav({ name: "sessions" });
+    if (S.view?.name === "chat" && S.view.sid === sid) nav({ name: "home" });
     after?.();
   };
   const note = tvNote(sid, "stopping");
@@ -2359,18 +2396,26 @@ async function browseSheet(pick) {
   // Created folders open at once: from there "Use this folder" or another
   // level down. The name sheet replaces this one, so put it back afterwards.
   const newFolder = async (parent) => {
-    const name = await textSheet("New folder name", { plain: true, maxlength: 255 });
+    const path = await makeFolder(parent);
     rawSheet(body);
-    if (!name) return;
-    try {
-      const r = await T.rpc("mkdir", { parent, name });
-      await load(r.path);
-    } catch (e) {
-      toast(e.message || "Could not create the folder", true);
-    }
+    if (path) await load(path);
   };
   rawSheet(body);
   await load(null);
+}
+
+// A folder inside `parent`, named on a sheet of its own (it replaces any
+// open sheet, so callers put theirs back); its path, or null if cancelled
+// or refused
+async function makeFolder(parent) {
+  const name = await textSheet("New folder name", { plain: true, maxlength: 255 });
+  if (!name) return null;
+  try {
+    return (await T.rpc("mkdir", { parent, name })).path;
+  } catch (e) {
+    toast(e.message || "Could not create the folder", true);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------- project screen
@@ -2549,7 +2594,7 @@ function renderSearch() {
 
   if (q0 && S.search?.q === q0) draw();
   else if (q0) run(q0);
-  else if (finePointer()) input.focus();
+  else if (autoFocusText()) input.focus();
 }
 
 function searchItem(ps) {
@@ -2643,7 +2688,11 @@ async function renderFiles(path) {
     el("div", { class: "a-buttons", style: "margin-bottom:10px" },
       data.parent != null ? el("button", { class: "btn small", onclick: () => filesGo(data.parent) }, "‹ up") : null,
       dir && S.canUpload ? el("button", { class: "btn small", onclick: () => pickUpload(dir,
-        S.view.from ? () => { if (S.view?.name === "files") goBack(); } : null) }, "Upload…") : null),
+        S.view.from ? () => { if (S.view?.name === "files") goBack(); } : null) }, "Upload…") : null,
+      dir && S.canUpload ? el("button", { class: "btn small", onclick: async () => {
+        const made = await makeFolder(dir);
+        if (made && S.view?.name === "files" && S.view.path === dir) filesGo(made);
+      } }, "+ New folder") : null),
     node));
 }
 
@@ -3004,8 +3053,8 @@ async function uploadFile(dir, file, name, count = "") {
 // Keys: ⏎ acts on the highlighted row, which is "Choose files…" whenever a
 // folder opens, so ⏎ uploads here and ↓ ⏎ enters a folder; → enters the
 // highlighted folder, ← or Backspace goes up, u chooses files wherever the
-// highlight is. ⏎ waits out the grace period, so the ⏎ that sent the
-// command cannot also open the picker.
+// highlight is, n makes a folder here and opens it. ⏎ waits out the grace
+// period, so the ⏎ that sent the command cannot also open the picker.
 async function uploadSheet(sid) {
   const base0 = S.sessions.find((x) => x.sid === sid)?.cwd;
   if (!base0) { toast("This session has no folder", true); return; }
@@ -3021,19 +3070,29 @@ async function uploadSheet(sid) {
     if (a && body.contains(a) && a.tagName === "BUTTON") return a;
     return kbd.cur && body.contains(kbd.cur) ? kbd.cur : null;
   };
-  S.sheetKeys = (key) => {
+  const keys = (key) => {
     const act = {
       Enter: () => { if (Date.now() - opened >= KBD_GRACE) current()?.click(); },
       ArrowRight: () => { const d = current()?.dataset.dir; if (d) show(d); },
       ArrowLeft: () => { if (up) show(up); },
       Backspace: () => { if (up) show(up); },
       u: () => choose?.click(),
+      n: () => mk?.click(),
     }[key];
     if (act) act();
     return !!act;
   };
+  S.sheetKeys = keys;
+  let mk = null;   // the "new folder" button of the folder on show
+  // the name sheet replaces this one: put it back, in the new folder if made
+  const newFolder = async (dir) => {
+    const made = await makeFolder(dir);
+    rawSheet(body);
+    S.sheetKeys = keys;
+    show(made || dir);
+  };
   const show = async (path) => {
-    choose = up = null;
+    choose = up = mk = null;
     const head = el("div", { class: "sheet-title" }, "Upload to…");
     body.replaceChildren(head, el("div", { class: "notice" }, "Loading…"));
     let data;
@@ -3050,10 +3109,11 @@ async function uploadSheet(sid) {
     up = inside && data.parent ? data.parent : null;
     choose = el("button", { class: "btn primary", onclick: () => pickUpload(dir, closeSheet) },
       "Choose files…", kHint("u"));
+    mk = el("button", { class: "btn", onclick: () => newFolder(dir) }, "+ New folder", kHint("n"));
     body.replaceChildren(head,
       el("div", { class: "notice", style: "margin-top:0" }, shortPath(dir)),
       el("div", { class: "a-buttons", style: "margin-bottom:10px" }, choose,
-        up ? el("button", { class: "btn", onclick: () => show(up) }, "‹ up", kHint("←")) : null),
+        up ? el("button", { class: "btn", onclick: () => show(up) }, "‹ up", kHint("←")) : null, mk),
       ...data.entries.filter((f) => f.dir).map((f) =>
         el("button", { class: "sheet-item", "data-dir": f.path, onclick: () => show(f.path) },
           el("span", { class: "si-icon" }, "▸"),
@@ -3212,6 +3272,7 @@ function enterTab(sid) {
 }
 
 function openChat(sid) {
+  primeFocus();
   enterTab(sid);
   nav({ name: "chat", sid });
 }
@@ -3267,6 +3328,9 @@ function renderChat(sid) {
   const input = el("textarea", { class: "c-input", id: "chat-input", rows: 1,
     placeholder: "Message Claude…", enterkeyhint: "send" });
   const sendBtn = el("button", { class: "c-btn send", id: "send-btn", onclick: () => sendOrStop() }, "↑");
+  // with text in the box ↑ sends it, so a running turn needs its own ■
+  const stopBtn = el("button", { class: "c-btn stop hidden", id: "stop-btn",
+    "aria-label": "Stop", onclick: () => stopTurn() }, "■");
 
   input.value = getDraft(sid);
   input.addEventListener("input", () => {
@@ -3277,6 +3341,7 @@ function renderChat(sid) {
     // without it the text is 2 px short and a scrollbar shows at once
     const border = input.offsetHeight - input.clientHeight;
     input.style.height = Math.min(input.scrollHeight + border, 132) + "px";
+    updateSendBtn();
   });
   input.addEventListener("keydown", (e) => {
     if (homeEnd(input, e)) return;
@@ -3287,7 +3352,7 @@ function renderChat(sid) {
 
   const composer = el("div", { id: "composer" },
     el("button", { class: "c-btn", onclick: () => palette(sid) }, "/"),
-    input, sendBtn);
+    input, stopBtn, sendBtn);
 
   // while True View runs, the chat is a look back: a way back to the terminal
   const tvBar = el("div", { id: "tv-bar", class: s?.terminal ? "" : "hidden" },
@@ -3306,19 +3371,27 @@ function renderChat(sid) {
   updateStatusLine();
   // back in a chat, typing goes to the message box at once — only with a
   // keyboard, a phone would pop its on-screen one over the transcript
-  if (finePointer() && !overlayOpen()) input.focus({ preventScroll: true });
+  if ((autoFocusText() || primed()) && !overlayOpen()) input.focus({ preventScroll: true });
+}
+
+// Interrupts the chat's running turn; false when there is none to stop.
+function stopTurn() {
+  const sid = chatUI.sid;
+  if (!["working", "compacting", "starting"].includes((S.status[sid] || {}).state)) return false;
+  wsSend({ type: "interrupt", session_id: sid });
+  return true;
 }
 
 function sendOrStop(fromKeyboard) {
   const sid = chatUI.sid;
-  const st = (S.status[sid] || {}).state;
   const input = $("#chat-input");
   const text = input.value.trim();
-  if (!text && ["working", "compacting", "starting"].includes(st)) {
-    wsSend({ type: "interrupt", session_id: sid });
+  // an empty box: ■ stops the turn, ⏎ never (a quick second ⏎ after a send
+  // stopped the reply) and a tap only 1 s after a send (↑ turns into ■ there)
+  if (!text) {
+    if (!fromKeyboard && Date.now() - (chatUI.sentAt || 0) > 1000) stopTurn();
     return;
   }
-  if (!text) return;
   if (handleLocalCommand(sid, text)) { input.value = ""; input.style.height = "auto"; setDraft(sid, ""); return; }
   if (currentSession()?.terminal) { tvSendSheet(sid, text, fromKeyboard); return; }
   sendText(sid, text, fromKeyboard);
@@ -3328,6 +3401,7 @@ function sendText(sid, text, fromKeyboard) {
   const input = $("#chat-input");
   if (wsSend({ type: "send", session_id: sid, text })) {
     pendingSend[sid] = text;   // dropped as soon as the server accepts it
+    chatUI.sentAt = Date.now();
     setDraft(sid, "");
     if (input) {   // gone if the view changed while the sheet was open
       input.value = ""; input.style.height = "auto";
@@ -3362,19 +3436,42 @@ function tvNote(sid, what) {
     ? `True View is running: ${what} closes it, and a turn in progress there is cut off. ` : "";
 }
 
-// Text the server has not acknowledged yet, keyed by session. The runner
-// limit is the one refusal that arrives after the message left the box,
+// Text the server has not acknowledged yet, keyed by session. A refusal
+// (runner limit, quiet hours, ...) arrives after the message left the box,
 // so the app can put it back rather than lose what was typed.
 const pendingSend = {};
 
-// A refused message goes back into the box if that session is on screen and
-// its box is empty. Returns what resendPending needs.
+// The socket went down before the server acknowledged a message: it may
+// never have arrived, so it goes back into its box, or into that chat's
+// draft if another view is on screen.
+function restoreUnacked() {
+  for (const sid of Object.keys(pendingSend)) {
+    const text = pendingSend[sid];
+    if (chatUI.sid === sid && $("#chat-input")) { restorePending(sid); continue; }
+    delete pendingSend[sid];
+    setDraft(sid, joinText(text, getDraft(sid)));
+  }
+}
+
+// Text put back in front of what is already in a box or draft, so neither
+// is lost
+function joinText(back, current) {
+  if (!back) return current;
+  return current.trim() ? back + "\n\n" + current : back;
+}
+
+// A refused message goes back into the box if that session is on screen (in
+// front of anything typed since). Returns what resendPending needs.
 function restorePending(sid) {
   const text = pendingSend[sid];
   delete pendingSend[sid];
   const box = chatUI.sid === sid ? $("#chat-input") : null;
-  const restored = !!(text && box && !box.value.trim());
-  if (restored) { box.value = text; box.dispatchEvent(new Event("input")); setDraft(sid, text); }
+  const restored = !!(text && box);
+  if (restored) {
+    box.value = joinText(text, box.value);
+    box.dispatchEvent(new Event("input"));
+    setDraft(sid, box.value);
+  }
   return { text, restored };
 }
 
@@ -3393,7 +3490,7 @@ function resendPending(sid, { text, restored }) {
 // mode would wait for ExitPlanMode, a tool it does not have), its name stays
 // "Incognito", and skills, agents and MCP do not exist in it.
 const INCOGNITO_HIDDEN = new Set(["mode", "permissions", "rename", "library", "skills", "files",
-  "files-upload"]);
+  "files-upload", "upload"]);
 // CLI commands that still make sense there; the rest are skills or need files
 // (not /fast: twice the price per token, for a chat that gains little from speed)
 const INCOGNITO_CLI = new Set(["effort", "usage", "recap"]);
@@ -3418,6 +3515,7 @@ function handleLocalCommand(sid, text) {
     case "find": chatUI.find?.open(); return true;
     case "collapse": toggleCollapse(); return true;
     case "term": case "terminal": case "trueview": openTrueView(sid); return true;
+    case "login": loginSheet(sid); return true;
     case "library": case "skills": nav({ name: "skills" }); return true;
     // without the grant a project's own /files command still goes through
     case "files":
@@ -3426,7 +3524,7 @@ function handleLocalCommand(sid, text) {
         break;
       }
       if (S.canFiles) { openFiles(sid); return true; } break;
-    case "files-upload": if (S.canUpload) { uploadSheet(sid); return true; } break;
+    case "files-upload": case "upload": if (S.canUpload) { uploadSheet(sid); return true; } break;
   }
   return false;
 }
@@ -3472,13 +3570,22 @@ function updateStatusLine() {
   }
   const usageEl = line.querySelector(".s-usage");
   if (usageEl) usageEl.replaceChildren(...usageBits());
+  updateSendBtn();
+}
+
+// ↑ turns into ■ while a turn runs and the box is empty; with text in the
+// box ↑ stays and a separate ■ shows next to it.
+function updateSendBtn() {
   const btn = $("#send-btn");
-  if (btn) {
-    const input = $("#chat-input");
-    const showStop = busy && !(input && input.value.trim());
-    btn.textContent = showStop ? "■" : "↑";
-    btn.className = "c-btn " + (showStop ? "stop" : "send");
-  }
+  if (!btn || S.view?.name !== "chat") return;
+  const st = (S.status[S.view.sid] || {}).state;
+  const busy = ["working", "awaiting", "starting", "compacting"].includes(st);
+  const typed = !!$("#chat-input")?.value.trim();
+  const showStop = busy && !typed;
+  btn.textContent = showStop ? "■" : "↑";
+  btn.className = "c-btn " + (showStop ? "stop" : "send");
+  $("#stop-btn")?.classList.toggle("hidden",
+    !(typed && ["working", "compacting", "starting"].includes(st)));
 }
 
 // ---------------------------------------------------------------- true view (real claude TUI)
@@ -3650,7 +3757,7 @@ function openTerm(sid, mount, overlay) {
   ws.onmessage = (e) => {
     // text sent from the chat goes in once the TUI shows (the first bytes)
     if (typeof e.data !== "string" && termUI.paste?.sid === sid) {
-      const { text, at } = termUI.paste;
+      const { text, at, keepDraft } = termUI.paste;
       termUI.paste = null;
       // a terminal that did not come up keeps it in the chat's draft instead
       if (Date.now() - at < 30000) {
@@ -3658,7 +3765,8 @@ function openTerm(sid, mount, overlay) {
         // may have lost the TUI's mode switch, and a bare newline would submit
         ws.send(JSON.stringify({ type: "input",
           data: "\u001b[200~" + text.replace(/\r?\n/g, "\r") + "\u001b[201~" }));
-        setDraft(sid, "");
+        // the pasted text was the draft; /login was not
+        if (!keepDraft) setDraft(sid, "");
       }
     }
     if (typeof e.data === "string") {
@@ -3993,6 +4101,7 @@ function renderEvent(sid, ev, live) {
     }
 
     case "notice":
+      if (ev.auth === "failed") { appendMsg(authNotice(sid)); break; }
       appendMsg(el("div", { class: "notice " + (ev.level || "") }, ev.text
         + (ev.rate_limit === "rejected" && ev.resets_at ? ` — resets ${fmtReset(ev.resets_at)}` : "")));
       break;
@@ -4000,6 +4109,40 @@ function renderEvent(sid, ev, live) {
     case "meta": case "commands": case "context": case "status": case "system": case "debug":
       break; // state-only
   }
+}
+
+// The host's `claude` is logged out. /login works only in its interactive
+// TUI, so True View is the way in; the login covers every session.
+function canLoginHere(sid) {
+  return S.canTerminal && !S.sessions.find((x) => x.sid === sid)?.incognito;
+}
+
+function loginInTrueView(sid) {
+  termUI.paste = { sid, text: "/login", at: Date.now(), keepDraft: true };
+  openTrueView(sid);
+}
+
+function loginHow(sid) {
+  if (canLoginHere(sid)) return "Log in with /login in True View; the login covers every session.";
+  if (S.canTerminal) return "Log in with /login in True View of a regular (not incognito) session; the login covers every session.";
+  return "This device has no True View: log in from a device that has it, or run claude and /login in a terminal on the host.";
+}
+
+function authNotice(sid) {
+  return el("div", { class: "notice error" },
+    "Claude Code on the host is logged out. " + loginHow(sid),
+    canLoginHere(sid) ? el("div", { style: "margin-top:8px" },
+      el("button", { class: "btn small", onclick: () => loginInTrueView(sid) }, "Log in in True View")) : null);
+}
+
+function loginSheet(sid) {
+  sheet("Log in to Claude", [
+    canLoginHere(sid) ? { icon: ">_", label: "Log in in True View",
+      sub: "/login is typed there for you: press ⏎ and follow the link", primary: true,
+      action: () => loginInTrueView(sid) } : null,
+    { icon: "✕", label: "Cancel" },
+  ], [el("div", { class: "notice", style: "margin-top:0" },
+    "/login does not work in the chat: Claude Code accepts it only in its terminal. " + loginHow(sid))]);
 }
 
 function finalizeProvisionals() {
@@ -4106,6 +4249,7 @@ function permissionCard(sid, ev) {
     ev.description ? el("div", { class: "a-desc" }, ev.description) : null,
     ev.reason ? el("div", { class: "a-desc" }, ev.reason) : null,
     permInputPreview(ev),
+    clippedNote(ev),
     ev.suggestions?.length
       ? el("div", { class: "a-desc" }, "Always: " + ev.suggestions.map(describeSuggestion).join("; "))
       : null,
@@ -4119,9 +4263,10 @@ function permissionCard(sid, ev) {
   };
   // DOM append, not el(): a null child would print as "null"
   btns.append(...[
-    el("button", { class: "btn primary", "data-k": "1 y", onclick: () => respond({ behavior: "allow" }, "allowed") }, "Allow", kHint("1")),
+    el("button", { class: "btn primary", "data-k": "1 y", onclick: (e) =>
+      allowUnseen(ev, e.currentTarget, () => respond({ behavior: "allow" }, "allowed")) }, "Allow", kHint("1")),
     ev.suggestions?.length
-      ? el("button", { class: "btn", "data-k": "2", onclick: async () => {
+      ? el("button", { class: "btn", "data-k": "2", onclick: (e) => allowUnseen(ev, e.currentTarget, async () => {
           // "Always" widens what runs without asking again — confirm it
           if (!await ensureStepUp("Always allow")) return;
           // the server may still want a fresh passkey (stepup_required):
@@ -4131,7 +4276,7 @@ function permissionCard(sid, ev) {
             card._always = true;
             btns.querySelectorAll("button").forEach((b) => { b.disabled = true; });
           }
-        } }, "Always", kHint("2"))
+        }) }, "Always", kHint("2"))
       : null,
     el("button", { class: "btn danger", "data-k": "3 n", onclick: () => respond({ behavior: "deny", message: "User denied this action" }, "denied") }, "Deny", kHint("3")),
     el("button", { class: "btn small a-fill", "data-k": "4", onclick: async () => {
@@ -4194,21 +4339,68 @@ function describeSuggestion(s) {
   return s.type;
 }
 
-function permInputPreview(ev) {
-  const input = ev.input || {};
-  if (ev.tool === "Bash" && input.command) return el("pre", null, input.command);
-  if (ev.tool === "Edit" || ev.tool === "Write") {
-    const view = toolInputView(ev.tool, input);
-    return view || null;
-  }
-  const keys = Object.keys(input);
-  if (!keys.length) return null;
-  const txt = keys.map((k) => {
+// Approval cards show everything the server sent (it no longer clips them):
+// a long field gets its size under it; a field cut by the server's safety
+// cap (ev.clipped) gets a warning, and approving needs a second tap.
+// key: value lines for an input's fields, all of them or those not in skip
+function inputLines(input, skip = []) {
+  return Object.keys(input).filter((k) => !skip.includes(k)).map((k) => {
     let v = input[k];
     if (typeof v === "object") v = JSON.stringify(v, null, 1);
-    return `${k}: ${String(v).slice(0, 500)}`;
+    return `${k}: ${String(v)}`;
   }).join("\n");
-  return el("pre", null, txt.slice(0, 1200));
+}
+
+// what the card shows is what gets approved: the fields Bash, Write and Edit
+// draw their own way are followed by every other one (a sandbox switch,
+// replace_all)
+function otherFields(input, shown) {
+  const txt = inputLines(input, shown);
+  return txt ? el("pre", null, txt) : null;
+}
+
+function permInputPreview(ev) {
+  const input = ev.input || {};
+  if (ev.tool === "Bash" && input.command) {
+    return el("div", null, el("pre", null, input.command), sizeNote(input.command),
+      otherFields(input, ["command", "description"]));
+  }
+  if (ev.tool === "Write" && input.content) {
+    // not toolInputView: that one shows the first 3000 characters only
+    return el("div", null, el("div", { class: "out-label" }, input.file_path || "content"),
+      el("pre", null, input.content), sizeNote(input.content),
+      otherFields(input, ["file_path", "content"]));
+  }
+  if (ev.tool === "Edit") {
+    const view = toolInputView(ev.tool, input);
+    return view ? el("div", null, view, sizeNote((input.old_string || "") + "\n" + (input.new_string || "")),
+      otherFields(input, ["file_path", "old_string", "new_string"])) : null;
+  }
+  const txt = inputLines(input);
+  if (!txt) return null;
+  return el("div", null, el("pre", null, txt), sizeNote(txt));
+}
+
+// only where the box (220 px) has to scroll
+function sizeNote(s) {
+  const lines = s.split("\n").length;
+  return s.length >= 1000 || lines > 12
+    ? el("div", { class: "a-desc" }, `${s.length} characters, ${lines} lines (scroll)`) : null;
+}
+
+function clippedNote(ev) {
+  const cut = Object.entries(ev.clipped || {});
+  return cut.length
+    ? el("div", { class: "notice warn" }, cut.map(([field, n]) =>
+        `⚠ Too long to send whole: ${n} characters of ${field} not shown (cut from the middle)`).join("\n"))
+    : null;
+}
+
+// approving a card the server had to cut: the first tap only says so
+function allowUnseen(ev, btn, go) {
+  if (!Object.keys(ev.clipped || {}).length || btn._armed) return go();
+  btn._armed = true;
+  btn.firstChild.textContent = "Allow without seeing all? Tap again";
 }
 
 function questionCard(sid, ev) {
@@ -4268,7 +4460,8 @@ function questionCard(sid, ev) {
 function planCard(sid, ev) {
   const card = el("div", { class: "action-card", "data-req": ev.request_id },
     el("div", { class: "a-head" }, "▤ plan ready for review"),
-    el("div", { class: "msg m-assist", html: md(ev.plan || "") }));
+    el("div", { class: "msg m-assist", html: md(ev.plan || "") }),
+    clippedNote(ev));
   chatUI.byReq[ev.request_id] = card;
   const respond = (payload, label, mode) => {
     if (wsSend({ type: "permission", session_id: sid, request_id: ev.request_id, ...payload })) {
@@ -4277,8 +4470,10 @@ function planCard(sid, ev) {
     }
   };
   card.append(el("div", { class: "a-buttons" },
-    el("button", { class: "btn primary", "data-k": "1", onclick: () => respond({ behavior: "allow" }, "approved — auto-accepting edits", "acceptEdits") }, "Approve, accept edits", kHint("1")),
-    el("button", { class: "btn", "data-k": "2", onclick: () => respond({ behavior: "allow" }, "approved", "default") }, "Approve, ask each time", kHint("2")),
+    el("button", { class: "btn primary", "data-k": "1", onclick: (e) =>
+      allowUnseen(ev, e.currentTarget, () => respond({ behavior: "allow" }, "approved — auto-accepting edits", "acceptEdits")) }, "Approve, accept edits", kHint("1")),
+    el("button", { class: "btn", "data-k": "2", onclick: (e) =>
+      allowUnseen(ev, e.currentTarget, () => respond({ behavior: "allow" }, "approved", "default")) }, "Approve, ask each time", kHint("2")),
     el("button", { class: "btn danger", "data-k": "3", onclick: async () => {
       const note = await textSheet("What should change in the plan?");
       if (note !== null) respond({ behavior: "deny", message: note || "Keep planning" }, "sent back");
@@ -4830,6 +5025,38 @@ function libDetailSheet(kind, it) {
 // the touch screen as its primary pointer.
 function finePointer() { return matchMedia("(any-pointer: fine)").matches; }
 
+// iPadOS: a text field focused by code, not by a tap or a key, shows the
+// caret but gets no keyboard session; keys go nowhere and the on-screen
+// keyboard leaves an empty space until the field loses the focus. So on a
+// touch screen a box is never focused on its own, only on a tap.
+// iPadOS reports itself as a Mac; touch points tell the two apart. A Windows
+// or Chrome OS touch screen is not affected and keeps the auto-focus.
+const APPLE_TOUCH = navigator.maxTouchPoints > 0 && /iPad|iPhone|Macintosh/.test(navigator.userAgent);
+function autoFocusText() { return finePointer() && !APPLE_TOUCH; }
+
+// An iPad with a keyboard still gets the caret in a chat opened by a tap: the
+// chat is drawn after a history step, outside the tap, so a hidden box is
+// focused during the tap to start the keyboard session, and renderChat hands
+// the focus on to the message box, which keeps that session. Without user
+// activation (a timer, a server push) nothing is primed.
+let focusProxy = null;
+function primeFocus() {
+  if (autoFocusText() || !finePointer() || !navigator.userActivation?.isActive) return;
+  if (!focusProxy) {
+    focusProxy = document.createElement("textarea");
+    focusProxy.setAttribute("aria-hidden", "true");
+    focusProxy.tabIndex = -1;
+    // 16px: iOS zooms into a smaller field
+    focusProxy.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;"
+      + "opacity:0;border:0;padding:0;font-size:16px;pointer-events:none";
+    document.body.append(focusProxy);
+  }
+  focusProxy.focus({ preventScroll: true });
+  // no chat came (an error, another screen): the hidden box lets go
+  setTimeout(() => { if (primed()) focusProxy.blur(); }, 2000);
+}
+function primed() { return !!focusProxy && document.activeElement === focusProxy; }
+
 // Home / End in a prompt box go to the start / end of the line, as on a PC
 // (macOS scrolls the page and leaves the caret); ⇧ extends the selection.
 // A line here is a line of text up to ⏎, not a visually wrapped row.
@@ -4880,7 +5107,7 @@ function kbdCards() {
     // body): give the message box the focus so a reply needs no click — only
     // with a keyboard, a phone would pop its on-screen one
     const a = document.activeElement;
-    if (prev?.classList.contains("resolved") && finePointer() && !overlayOpen()
+    if (prev?.classList.contains("resolved") && autoFocusText() && !overlayOpen()
         && (!a || a === document.body || chatUI.msgs?.contains(a))) {
       $("#chat-input")?.focus({ preventScroll: true });
     }
@@ -4934,14 +5161,14 @@ function keysSheet() {
     ["search · message box in a chat", "/"],
     ["message box", "i"],
     ["in it: start · end of the line (⇧ selects)", "home · end"],
-    ["close sheet or the files screen, leave a text field", "esc"],
+    ["chat: stop the running turn, else switch keys to shortcuts until a click (text otherwise goes into the message box) · close sheet or the files screen, leave a text field", "esc · ⌘."],
     ["back", "⌫  ["],
     ["Home · Sessions · Projects · Tabs", "g h · g s · g p · g t"],
     ["Allow · Always · Deny · Deny with note", "1 y · 2 · 3 n · 4"],
     ["answer a question · plan choice", "1–9"],
     ["file: scroll · page · prev/next · download · close", "↑ ↓ · space · ← → · d · ⏎"],
     ["file: find in the text · next / previous match", "/ or ⌘F · ⏎ / ⇧⏎"],
-    ["upload: highlighted row · into folder · up · choose files", "⏎ · → · ← · u"],
+    ["upload: highlighted row · into folder · up · choose files · new folder", "⏎ · → · ← · u · n"],
     ["chat: find in the messages (or /find)", "⌘F · ⏎ / ⇧⏎"],
     ["chat: collapse · expand all turns (or /collapse)", "c"],
   ];
@@ -4958,11 +5185,24 @@ function keysSheet() {
 document.addEventListener("keydown", (e) => {
   const t = e.target;
   if (t?.closest?.(".xterm")) return;   // True View: every key belongs to the terminal
-  if (e.key === "Escape") {
+  // a composition (Japanese, Chinese, a dead key) takes its own Esc: it
+  // cancels the candidate, it must not stop the turn. Safari reports
+  // isComposing false on that key, keyCode 229 still marks it
+  if (e.isComposing || e.keyCode === 229) return;
+  // ⌘. is the Mac and iPad "cancel", and the iPad keyboard has no esc
+  if (e.key === "Escape" || (e.metaKey && e.key === ".")) {
     if (overlayOpen()) { closeSheet(); closeDrawer(); }
-    else if (isTyping(t)) t.blur();
-    // the files screen closes like the upload sheet does (back to the chat)
-    else if (S.view?.name === "files") { e.preventDefault(); goBack(); }
+    // in a chat it stops a running turn first, as in Claude Code
+    else if (S.view?.name === "chat" && (!isTyping(t) || t.id === "chat-input") && stopTurn()) {
+      e.preventDefault();
+    }
+    else {
+      // in a chat Esc turns the next keys into shortcuts instead of text
+      if (S.view?.name === "chat") shortcutsIn = S.view.sid;
+      if (isTyping(t)) t.blur();
+      // the files screen closes like the upload sheet does (back to the chat)
+      else if (S.view?.name === "files") { e.preventDefault(); goBack(); }
+    }
     return;
   }
   // ⌘F / Ctrl+F in the file viewer and in the chat opens the app's own
@@ -4973,7 +5213,12 @@ document.addEventListener("keydown", (e) => {
       e.preventDefault(); chatUI.find.open(); return;
     }
   }
-  if (e.defaultPrevented || e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.defaultPrevented || e.isComposing || e.ctrlKey || e.metaKey) return;
+  // ⌥ makes letters (ą, ę on a Polish keyboard), never a shortcut
+  if (e.altKey) {
+    if (!isTyping(t) && S.authed && !S.locked && !S.passkeyGate) typeIntoChat(e, e.key.toLowerCase());
+    return;
+  }
   if (isTyping(t)) {
     // ↓ from a search box goes on to the list under it
     if (e.key === "ArrowDown" && t.type === "search") { e.preventDefault(); kbdMove(1); }
@@ -4983,6 +5228,7 @@ document.addEventListener("keydown", (e) => {
 
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const go = (fn) => { e.preventDefault(); fn(); };
+  if (typeIntoChat(e, key)) return;
   // a sheet with keys of its own (the file viewer)
   if (S.sheetKeys && $("#sheet-root").children.length && S.sheetKeys(key)) { e.preventDefault(); return; }
   if (kbd.g) {
@@ -5035,7 +5281,26 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-document.addEventListener("pointerdown", () => { kbd.key = null; }, true);
+document.addEventListener("pointerdown", () => { kbd.key = null; shortcutsIn = null; }, true);
+
+// A character typed in a chat outside the message box goes into it: the box
+// is focused during the key press, which on an iPad also gives it a keyboard
+// session (focus from code outside a key or a tap leaves a dead caret). Not
+// in shortcut mode (after Esc), over a sheet, on a focused button's space,
+// or for a key a pending approval card answers to.
+function typeIntoChat(e, key) {
+  if (e.key.length !== 1 || S.view?.name !== "chat" || overlayOpen()) return false;
+  if (shortcutsIn === S.view.sid) return false;
+  if (e.key === " " && e.target?.tagName === "BUTTON") return false;
+  const input = $("#chat-input");
+  const card = kbd.card && !kbd.card.classList.contains("resolved") ? kbd.card : null;
+  if (!input || card?.querySelector(`[data-k~="${CSS.escape(key)}"]`)) return false;
+  e.preventDefault();
+  input.focus({ preventScroll: true });
+  input.setRangeText(e.key, input.selectionStart, input.selectionEnd, "end");
+  input.dispatchEvent(new Event("input"));
+  return true;
+}
 
 // Home, Sessions and Tabs re-render on every status update; put the keyboard
 // focus back on the same item (by its data-kbd key) when that happens.
@@ -5093,6 +5358,7 @@ if (window.visualViewport) {
   };
   vv.addEventListener("resize", update);
   vv.addEventListener("scroll", update);
+  fitViewport = update;
   update();   // a web view already short at launch
 }
 

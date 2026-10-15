@@ -52,7 +52,7 @@ from .config import (
     write_private,
 )
 from .prompt import PHONE_APPEND
-from .events import clip, clip_input, normalize_message, tool_summary
+from .events import approval_input, clip, normalize_message, tool_summary
 from .history import chain_prompts, history_events
 from .transcript import last_activity_ms, short_path, transcript_stats
 from .watch import rows_to_events, transcript_path
@@ -866,8 +866,9 @@ class SessionRunner:
             ev = {"kind": "question", "request_id": rid,
                   "questions": tool_input.get("questions") or []}
         elif tool_name == "ExitPlanMode":
+            plan, cut = approval_input({"plan": tool_input.get("plan") or ""})
             ev = {"kind": "plan_approval", "request_id": rid,
-                  "plan": clip(tool_input.get("plan") or "", 20000)}
+                  "plan": plan["plan"], "clipped": cut}
         else:
             suggestions = []
             for s in (context.suggestions or []):
@@ -876,10 +877,13 @@ class SessionRunner:
                     if self.incognito or not d.get("destination"):
                         d["destination"] = "session"   # as applied below
                     suggestions.append(d)
+            # full input: what the card shows is what gets approved
+            shown, cut = approval_input(tool_input)
             ev = {
                 "kind": "permission", "request_id": rid,
                 "tool": tool_name,
-                "input": clip_input(tool_input),
+                "input": shown,
+                "clipped": cut,
                 "summary": tool_summary(tool_name, tool_input),
                 "title": context.title or "",
                 "display_name": context.display_name or "",

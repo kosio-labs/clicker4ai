@@ -7,6 +7,7 @@ supersedes them.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from claude_agent_sdk import (
@@ -57,13 +58,19 @@ def usage_windows(info) -> dict[str, dict]:
 
 
 def clip(s: str, limit: int = MAX_TEXT) -> str:
+    return clip_count(s, limit)[0]
+
+
+def clip_count(s: str | None, limit: int) -> tuple[str, int]:
+    """clip(), plus how many characters it left out."""
     if s is None:
-        return ""
+        return "", 0
     if len(s) <= limit:
-        return s
+        return s, 0
     head = s[: int(limit * 0.75)]
     tail = s[-int(limit * 0.15):]
-    return f"{head}\n… [{len(s) - len(head) - len(tail)} chars truncated] …\n{tail}"
+    hidden = len(s) - len(head) - len(tail)
+    return f"{head}\n… [{hidden} chars truncated] …\n{tail}", hidden
 
 
 def clip_input(tool_input: dict[str, Any]) -> dict[str, Any]:
@@ -74,6 +81,27 @@ def clip_input(tool_input: dict[str, Any]) -> dict[str, Any]:
         else:
             out[k] = v
     return out
+
+
+# Approval cards show what is approved: no clipping below this. Above it
+# (only a safety cap; transcripts so far peak at ~55k), the card is told
+# how much it did not get.
+MAX_APPROVAL_FIELD = 200_000
+
+
+def approval_input(tool_input: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:
+    """Tool input for a permission card, plus {field: hidden chars} for any
+    field cut by the safety cap."""
+    out, cut = {}, {}
+    for k, v in (tool_input or {}).items():
+        # a list or object is capped as its JSON text: an MCP tool can nest
+        # megabytes where no string field shows them
+        s = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, default=str)
+        if len(s) > MAX_APPROVAL_FIELD:
+            out[k], cut[k] = clip_count(s, MAX_APPROVAL_FIELD)
+        else:
+            out[k] = v
+    return out, cut
 
 
 def tool_summary(name: str, tool_input: dict[str, Any]) -> str:
@@ -191,8 +219,13 @@ def normalize_message(msg: Any) -> list[dict[str, Any]]:
                     "parent_tool_use_id": parent,
                 })
         if msg.error:
-            evs.append({"kind": "notice", "level": "error",
-                        "text": f"Assistant error: {msg.error}"})
+            ev = {"kind": "notice", "level": "error",
+                  "text": f"Assistant error: {msg.error}"}
+            if msg.error == "authentication_failed":
+                # the host's `claude` is logged out: the app says how to log
+                # in (only True View can, /login needs the interactive TUI)
+                ev["auth"] = "failed"
+            evs.append(ev)
         return evs
 
     if isinstance(msg, UserMessage):

@@ -5,9 +5,6 @@ Formerly “[Better Claude RC](#license)” (`better-claude-rc`), then briefly
 Clicker4Claude — until someone read the trademark guidelines (see
 [Authentication and trademarks](#authentication-and-trademarks)).*
 
-> **Status:** the last release candidate before 1.0.0. Only fixes go in
-> until then; feature requests are welcome and come after 1.0.0.
-
 <br>
 
 A self-hosted PWA (a web app you can add to the home screen like an app)
@@ -109,7 +106,7 @@ their `~/.claude`.
 1. Install Clicker4AI, choose its folder and address, and start it:
 
    ```bash
-   pipx install clicker4ai==1.0.0rc4  # an RC needs its version; takes minutes
+   pipx install clicker4ai            # takes minutes
    c4ai config roots add ~/work       # the folder with your projects
    c4ai config set host 192.168.1.10  # this computer's address
    c4ai serve --no-pair               # leave it running
@@ -628,7 +625,8 @@ Viewing a file:
 Uploading (only devices with the `--files-upload` grant): several files at
 once, up to 50 MB each, into the folder on screen, or straight from the chat
 with `/files-upload`. An existing name is never overwritten: the app asks for
-another one or cancels.
+another one or cancels. *+ New folder* on both screens makes a folder there
+and opens it (`n` in the chat's upload sheet).
 
 What it shows: everything in the device's folders, hidden files too (except
 `.git`, `node_modules`, `.venv`, this server's data and `~/.claude`). Nothing
@@ -999,10 +997,11 @@ status feedback).
 ## Changes
 
 Coming in 1.1.0: the app in German, Spanish, French, Italian and Polish;
-MCP tools and auto mode in incognito chats; a tab pulses when a turn ends
-with a question to you; Markdown files open rendered in the file viewer.
+MCP tools and auto mode in incognito chats; images pasted into messages; a
+tab pulses when a turn ends with a question to you; Markdown files open
+rendered in the file viewer.
 
-### 1.0.0 (not released yet)
+### 1.0.0 (2026-10-15)
 
 - Fix: back from a sleeping phone, a locked app shows the lock screen at
   once instead of swallowing the first tap.
@@ -1023,6 +1022,15 @@ with a question to you; Markdown files open rendered in the file viewer.
   random, also back from another app: a key typed outside the message box
   goes into it; Esc (⌘. on an iPad) first turns the keys into shortcuts
   until the next click.
+- Uploading can make a new folder (*+ New folder*).
+- Fix: an approval card shows the whole command or file, not a shortened
+  one, and every other field of the call (e.g. a sandbox switch).
+- Fix: after the lock screen, the app no longer reconnects on every
+  message, losing replies on the way.
+- Fix: the first tap after coming back to the app (Allow, Stop, a message)
+  is no longer refused while it reconnects.
+- Fix: a message that may not have arrived goes back into the box even
+  when the box already has text.
 
 ### 1.0.0rc4 (2026-09-30)
 
